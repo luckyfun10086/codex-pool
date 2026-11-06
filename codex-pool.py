@@ -386,7 +386,23 @@ def cmd_rm(slot):
     print(f'恢复: 将 {dst.name} 目录移回 slots/{slot} 即可; 彻底删除: 清空 trash/ 目录。')
 
 
+def _ensure_cjk_stdout():
+    """控制台编码编不了中文(如西文 Windows 的 cp1252)时切换 UTF-8, 避免打印即崩溃。"""
+    for name in ('stdout', 'stderr'):
+        stream = getattr(sys, name, None)
+        if not stream or not hasattr(stream, 'reconfigure'):
+            continue
+        try:
+            '\u4e2d'.encode(stream.encoding or 'ascii')
+        except (UnicodeEncodeError, LookupError):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
+
 def main():
+    _ensure_cjk_stdout()
     argv = sys.argv[1:]
     if not argv or argv[0] in ('-h', '--help', 'help'):
         print(__doc__)
