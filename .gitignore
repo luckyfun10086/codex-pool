@@ -1,0 +1,14 @@
+# 号池数据目录 —— 含账号凭证 / 明文密码 / 邮箱, 绝对不能提交
+.codex-pool/
+auth.json
+auth.json.bak
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.tmp
+
+# 系统
+.DS_Store
+Thumbs.db
