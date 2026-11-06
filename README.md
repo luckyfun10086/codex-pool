@@ -1,5 +1,7 @@
 # codex-pool — Codex 多账号号池管理器
 
+[English](README.en.md) | 简体中文
+
 Windows 下为 Codex Desktop / CLI 管理多个 ChatGPT 账号：把各账号的登录凭证
 （`~/.codex/auth.json`）快照到命名槽位，一键切换、查询额度、账号报废回收。
 
