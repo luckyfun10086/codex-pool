@@ -11,6 +11,8 @@ with one-click switching, quota monitoring and a recycle bin for dead accounts.
 > credential management only. Any consequence of using it (including account
 > bans) is your own responsibility.
 
+![GUI preview](docs/gui-preview.png)
+
 ## Features
 
 - **Pool lifecycle**: `add` (isolate current login, then log a new account in) /
