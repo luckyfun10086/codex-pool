@@ -10,6 +10,14 @@ Windows 下为 Codex Desktop / CLI 管理多个 ChatGPT 账号：把各账号的
 
 ![GUI 预览](docs/gui-preview.png)
 
+## 下载 / 安装
+
+- **免安装版**：从 [Releases](../../releases) 下载 `codex-pool-gui.exe`（图形界面）或
+  `codex-pool.exe`（命令行），无需安装 Python。exe 由 GitHub Actions 自动构建，
+  配置见 [build-release.yml](.github/workflows/build-release.yml)。
+  PyInstaller 打包的 exe 可能被杀毒软件误报，介意请用源码方式运行。
+- **源码版**：见下方安装说明。
+
 ## 功能
 
 - **号池管理**：`add`（隔离当前登录，登录新号）/ `get`（收取并验证新号）/

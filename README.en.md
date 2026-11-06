@@ -13,6 +13,16 @@ with one-click switching, quota monitoring and a recycle bin for dead accounts.
 
 ![GUI preview](docs/gui-preview.png)
 
+## Download / Install
+
+- **Standalone builds**: grab `codex-pool-gui.exe` (GUI) or `codex-pool.exe`
+  (CLI) from [Releases](../../releases) — no Python required. The executables
+  are built automatically by GitHub Actions
+  ([build-release.yml](.github/workflows/build-release.yml)). PyInstaller
+  binaries may trigger antivirus false positives; run from source if that
+  bothers you.
+- **From source**: see below.
+
 ## Features
 
 - **Pool lifecycle**: `add` (isolate current login, then log a new account in) /

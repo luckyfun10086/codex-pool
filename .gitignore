@@ -9,6 +9,11 @@ __pycache__/
 *.pyc
 *.tmp
 
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+
 # 系统
 .DS_Store
 Thumbs.db

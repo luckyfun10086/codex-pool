@@ -1,0 +1,48 @@
+name: Build Windows executables
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build CLI executable
+        run: pyinstaller --noconfirm --onefile --console --name codex-pool codex-pool.py
+
+      - name: Build GUI executable
+        run: pyinstaller --noconfirm --onefile --windowed --name codex-pool-gui --add-data "codex-pool.py;." codex-pool-gui.py
+
+      - name: Smoke test CLI executable
+        shell: bash
+        run: ./dist/codex-pool.exe status
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-pool-windows
+          path: dist/*.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/codex-pool.exe dist/codex-pool-gui.exe \
+            --title "${GITHUB_REF_NAME}" --generate-notes

@@ -8,6 +8,7 @@
 启动: pythonw codex-pool-gui.py   (日志: .codex-pool/gui.log)
 """
 import datetime
+import glob  # noqa: F401  打包时随 GUI 收集, 供内嵌的 codex-pool.py 使用
 import importlib.util
 import json
 import os
@@ -35,6 +36,15 @@ BACKUPS = BASE / 'backups'
 GUILOG = BASE / 'gui.log'
 CODEX_HOME = pathlib.Path.home() / '.codex'
 LIVE = CODEX_HOME / 'auth.json'
+
+# 加载共享核心脚本: PyInstaller 打包环境从打包目录取, 源码环境取同目录/数据目录
+if getattr(sys, 'frozen', False):
+    _core = pathlib.Path(getattr(sys, '_MEIPASS', '.')) / 'codex-pool.py'
+else:
+    _here = pathlib.Path(__file__).resolve().parent
+    _core = _here / 'codex-pool.py'
+    if not _core.exists():
+        _core = BASE / 'codex-pool.py'
 
 AUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 RATE_URL = 'https://chatgpt.com/backend-api/codex/usage'
@@ -107,11 +117,7 @@ def get_opener():
         _opener_proxy = proxy
     return _opener
 
-# 复用命令行版 codex-pool.py 里的槽位/解析逻辑, 单一数据源
-_here = pathlib.Path(__file__).resolve().parent
-_core = _here / 'codex-pool.py'
-if not _core.exists():
-    _core = BASE / 'codex-pool.py'
+# 复用核心脚本里的槽位/解析逻辑, 单一数据源 (加载位置见文件头 _core)
 _spec = importlib.util.spec_from_file_location('poolcore', _core)
 pool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pool)
