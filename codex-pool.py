@@ -214,10 +214,12 @@ def note_switch():
 
 
 def codex_running():
-    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq codex.exe'],
+    # Codex Desktop(MSIX)宿主是 ChatGPT.exe, 会孵化/复活 codex.exe, 两个都要查
+    r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
                        capture_output=True,
                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    return b'codex.exe' in r.stdout.lower()
+    out = r.stdout.lower()
+    return b'codex.exe' in out or b'chatgpt.exe' in out
 
 
 def verify_live(expect_acc, tries=3):

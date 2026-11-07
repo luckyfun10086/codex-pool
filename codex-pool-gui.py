@@ -254,24 +254,32 @@ def http_err_short(e):
 CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 KILL_ERROR = ''
 
+# Codex Desktop(MSIX 版)的宿主进程是 ChatGPT.exe, 它负责孵化/复活 codex.exe,
+# 只杀 codex.exe 会被宿主秒复活, 必须两个一起杀。
+PROC_NAMES = ('ChatGPT.exe', 'codex.exe')
+
 
 def _taskkill(*extra):
-    return subprocess.run(['taskkill', '/IM', 'codex.exe', *extra],
+    args = ['taskkill']
+    for n in PROC_NAMES:
+        args += ['/IM', n]
+    return subprocess.run([*args, *extra],
                           capture_output=True, creationflags=CREATE_NO_WINDOW)
 
 
 def _codex_pids():
-    """列出 codex.exe 的 PID 列表(无窗口)。"""
-    r = subprocess.run(
-        ['tasklist', '/FI', 'IMAGENAME eq codex.exe', '/FO', 'CSV', '/NH'],
-        capture_output=True, creationflags=CREATE_NO_WINDOW)
-    pids = []
+    """列出 Codex 相关进程 {名字小写: [pid...]}; 空字典表示全部退出。"""
+    r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+    want = {n.lower() for n in PROC_NAMES}
+    found = {}
     for line in r.stdout.decode('gbk', errors='replace').splitlines():
-        if line.lower().startswith('"codex.exe"'):
-            parts = [p.strip('"') for p in line.split('","')]
-            if len(parts) > 1 and parts[1].isdigit():
-                pids.append(int(parts[1]))
-    return pids
+        if not line.startswith('"'):
+            continue
+        parts = [p.strip('"') for p in line.split('","')]
+        if parts and parts[0].lower() in want and len(parts) > 1 and parts[1].isdigit():
+            found.setdefault(parts[0].lower(), []).append(int(parts[1]))
+    return found
 
 
 def kill_err_hint():
@@ -285,7 +293,7 @@ def kill_err_hint():
 
 
 def kill_codex():
-    """退出 Codex Desktop: 先优雅关闭(2s), 再强杀补刀(约10s)。返回是否全部退出。"""
+    """退出 Codex Desktop(宿主+子进程): 先优雅关闭(2s), 再强杀补刀(约10s)。"""
     global KILL_ERROR
     KILL_ERROR = ''
     _taskkill()  # 不带 /F: 发送关闭消息, 让它优雅退出
