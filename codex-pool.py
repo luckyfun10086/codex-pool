@@ -44,6 +44,13 @@ BACKUP_DIR = POOL / 'backups'
 TRASH = POOL / 'trash'
 COOLDOWN_SEC = 45
 
+# 首次运行自动创建数据目录骨架(全新机器没有 ~/.codex-pool, 写锁/状态文件前必须存在)
+try:
+    POOL.mkdir(parents=True, exist_ok=True)
+    SLOTS.mkdir(exist_ok=True)
+except Exception:
+    pass  # 目录不可写时留给具体操作报出明确错误
+
 
 def mask(email):
     if not isinstance(email, str) or '@' not in email:
@@ -171,6 +178,7 @@ def find_slot_by_account(acc):
 
 def acquire_lock(wait=10):
     """跨进程切换锁(GUI 与 CLI 互斥)。超60秒的锁视为残留自动清除。"""
+    LOCKF.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + wait
     while True:
         try:

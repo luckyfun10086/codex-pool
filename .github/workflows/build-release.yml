@@ -31,6 +31,10 @@ jobs:
         shell: bash
         run: ./dist/codex-pool.exe status
 
+      - name: Smoke test on fresh machine (skeleton auto-create)
+        shell: bash
+        run: USERPROFILE="$(mktemp -d)" ./dist/codex-pool.exe status
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
