@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 BASE = pathlib.Path.home() / '.codex-pool'
 SLOTS = BASE / 'slots'
@@ -382,6 +382,8 @@ class App(tk.Tk):
                                      command=self.on_status, width=24)
         self.btn_use = ttk.Button(top, text='use  切换到该账号',
                                   command=self.on_use, width=20)
+        self.btn_import = ttk.Button(top, text='import  导入JSON',
+                                     command=self.on_import, width=16)
         self.btn_rm = ttk.Button(top, text='rm  删除(入回收站)', command=self.on_rm,
                                  width=20)
         self.btn_trash = ttk.Button(top, text='trash  回收站', command=self.on_trash,
@@ -393,8 +395,8 @@ class App(tk.Tk):
         for i, b in enumerate((self.btn_add, self.btn_get, self.btn_status,
                                self.btn_use)):
             b.grid(row=0, column=i, padx=(0, 8), pady=(0, 4))
-        for i, b in enumerate((self.btn_rm, self.btn_trash, self.btn_refresh,
-                               self.btn_proxy)):
+        for i, b in enumerate((self.btn_import, self.btn_rm, self.btn_trash,
+                               self.btn_refresh, self.btn_proxy)):
             b.grid(row=1, column=i, padx=(0, 8))
         top.columnconfigure(4, weight=1)
 
@@ -461,7 +463,7 @@ class App(tk.Tk):
         state = 'disabled' if flag else 'normal'
         for b in (self.btn_add, self.btn_get, self.btn_status,
                   self.btn_use, self.btn_rm, self.btn_trash,
-                  self.btn_refresh, self.btn_proxy):
+                  self.btn_refresh, self.btn_import, self.btn_proxy):
             b.configure(state=state)
 
     def selected_slot(self):
@@ -660,6 +662,61 @@ class App(tk.Tk):
                     ensure_ascii=False), encoding='utf-8')
                 pool.note_switch()
                 self._emit(f'现在启动 Codex Desktop 登录新号, 登录完成后回来点 [get] → 槽位 [{target}]。')
+                self._emit(None, 'refresh')
+            finally:
+                pool.release_lock()
+
+        self.run_bg(work)
+
+    def on_import(self):
+        """导入买来的 auth.json 凭证文件入池, 不触碰当前登录。"""
+        path = filedialog.askopenfilename(
+            title='选择要导入的 auth.json 凭证文件',
+            filetypes=[('JSON 文件', '*.json'), ('所有文件', '*.*')],
+            parent=self)
+        if not path:
+            return
+        try:
+            auth = pool.load_auth(pathlib.Path(path))
+            email, plan, until, exp = pool.describe(auth)
+        except Exception as e:
+            messagebox.showerror('导入 JSON', f'不是有效的 Codex 凭证文件:\n{e}',
+                                 parent=self)
+            return
+        acc = pool.account_id(auth)
+        existing = pool.find_slot_by_account(acc) if acc else None
+        if existing:
+            target, action = existing, f'该账号已在槽位 [{existing}], 导入将刷新其凭证'
+        else:
+            sel = self.selected_slot()
+            target = (sel if sel and not (SLOTS / sel / 'auth.json').exists()
+                      else pick_target_slot(None))
+            action = f'导入到空槽位 [{target}]'
+        if not messagebox.askyesno(
+                '导入 JSON',
+                f'{action}\n\n{email} ({plan}, 订阅至 {until})\n'
+                f'token 到期 {exp}\n当前登录不受影响。继续?',
+                parent=self):
+            return
+
+        def work():
+            if not pool.acquire_lock():
+                self._emit('另一个操作进行中, 已中止。')
+                return
+            try:
+                sd = SLOTS / target
+                sd.mkdir(parents=True, exist_ok=True)
+                if (sd / 'auth.json').exists():
+                    pool.backup_file(sd / 'auth.json', f'slot{target}-before-import')
+                save_auth(sd / 'auth.json', auth)
+                meta = load_meta()
+                meta.setdefault(target, {})['email'] = email
+                save_meta(meta)
+                self.quota.pop(target, None)
+                self.reached.discard(target)
+                verb = '刷新' if existing else '导入'
+                self._emit(f'已{verb} → 槽位 [{target}]: {email} ({plan}, 订阅至 {until})。'
+                           f'当前登录未变, 点 Status 可验证凭证活性与额度。')
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()

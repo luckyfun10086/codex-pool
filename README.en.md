@@ -86,6 +86,7 @@ Buttons (top panel):
 | `get  收取刚登录的号` | Capture the newly logged-in account into the pool (validates it) |
 | `Status  查额度(5h/周)+订阅` | Query every account's 5h/weekly usage, reset times & reset credits |
 | `use  切换到该账号` | Switch Codex to the selected account |
+| `import  导入JSON` | Import an external auth.json credential file into the pool (for token-only accounts; no login needed) |
 | `rm  删除(入回收站)` | Move the selected account to the recycle bin |
 | `trash  回收站` | Recycle bin (restore / purge) |
 | `Refresh  刷新` | Refresh the table locally (no network) |
