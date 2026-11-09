@@ -501,35 +501,35 @@ class App(tk.Tk):
         top.pack(fill='x')
         self.btn_add = ttk.Button(top, text=T('add  登录新号(隔离当前)',
                                               'add  Login new (isolate)'),
-                                  command=self.on_add, width=24)
+                                  command=self.on_add, )
         self.btn_get = ttk.Button(top, text=T('get  收取刚登录的号',
                                               'get  Capture new login'),
-                                  command=self.on_get, width=24)
+                                  command=self.on_get, )
         self.btn_status = ttk.Button(top, text=T('Status  查额度(5h/周)+订阅',
                                                  'Status  Quota (5h/wk)'),
-                                     command=self.on_status, width=24)
+                                     command=self.on_status, )
         self.btn_use = ttk.Button(top, text=T('use  切换到该账号',
                                               'use  Switch to it'),
-                                  command=self.on_use, width=20)
+                                  command=self.on_use, )
         self.btn_import = ttk.Button(top, text=T('import  导入JSON',
                                                  'import  Import JSON'),
-                                     command=self.on_import, width=16)
+                                     command=self.on_import, )
         self.btn_rm = ttk.Button(top, text=T('rm  删除(入回收站)',
                                              'rm  Delete (trash)'),
-                                 command=self.on_rm, width=20)
+                                 command=self.on_rm, )
         self.btn_trash = ttk.Button(top, text=T('trash  回收站',
                                                 'trash  Recycle bin'),
-                                    command=self.on_trash, width=14)
+                                    command=self.on_trash, )
         self.btn_refresh = ttk.Button(top, text=T('Refresh  刷新',
                                                   'Refresh'),
-                                      command=self.on_refresh, width=14)
+                                      command=self.on_refresh, )
         self.btn_proxy = ttk.Button(top, text=T('proxy  代理', 'proxy'),
-                                    command=self.on_proxy, width=12)
+                                    command=self.on_proxy, )
         self.btn_auto = ttk.Button(top, text=T('auto  自动切换',
                                                'auto  Auto-switch'),
-                                   command=self.on_auto, width=14)
+                                   command=self.on_auto, )
         self.btn_lang = ttk.Button(top, text=T('中/EN', '中/EN'),
-                                   command=self.on_lang, width=8)
+                                   command=self.on_lang, )
         for i, b in enumerate((self.btn_add, self.btn_get, self.btn_status,
                                self.btn_use)):
             b.grid(row=0, column=i, padx=(0, 8), pady=(0, 4))
