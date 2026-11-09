@@ -133,14 +133,21 @@ def _taskkill(*extra):
     args = ['taskkill']
     for n in PROC_NAMES:
         args += ['/IM', n]
-    return subprocess.run([*args, *extra],
-                          capture_output=True, creationflags=CREATE_NO_WINDOW)
+    try:
+        return subprocess.run([*args, *extra], capture_output=True,
+                              creationflags=CREATE_NO_WINDOW, timeout=15)
+    except subprocess.TimeoutExpired:
+        return None  # 系统命令挂起, 由调用方中止
 
 
 def _codex_pids():
-    """列出 Codex 相关进程 {名字小写: [pid...]}; 空字典表示全部退出。"""
-    r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
-                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+    """列出 Codex 相关进程 {名字小写: [pid...]}; 空字典=全部退出; None=查询挂起。"""
+    try:
+        r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
+                           capture_output=True, creationflags=CREATE_NO_WINDOW,
+                           timeout=15)
+    except subprocess.TimeoutExpired:
+        return None
     want = {n.lower() for n in PROC_NAMES}
     found = {}
     for line in r.stdout.decode('gbk', errors='replace').splitlines():
@@ -171,14 +178,25 @@ def kill_codex():
     _taskkill()  # 不带 /F: 发送关闭消息, 让它优雅退出
     for _ in range(4):
         time.sleep(0.5)
-        if not _codex_pids():
+        pids = _codex_pids()
+        if pids is None:
+            KILL_ERROR = 'tasklist 无响应(系统进程枚举挂起, 建议重启电脑) / tasklist hung (reboot recommended)'
+            return False
+        if not pids:
             return True
     for i in range(9):
         r = _taskkill('/F', '/T')
+        if r is None:
+            KILL_ERROR = 'taskkill 无响应(系统进程枚举挂起, 建议重启电脑) / taskkill hung (reboot recommended)'
+            return False
         if i == 0:
             KILL_ERROR = (r.stderr or b'').decode('gbk', errors='replace').strip()
         time.sleep(1.0)
-        if not _codex_pids():
+        pids = _codex_pids()
+        if pids is None:
+            KILL_ERROR = 'tasklist 无响应(系统进程枚举挂起, 建议重启电脑) / tasklist hung (reboot recommended)'
+            return False
+        if not pids:
             return True
     return False
 
@@ -877,8 +895,20 @@ class App(tk.Tk):
     def on_use(self):
         name = self.selected_slot()
         if not name or not (SLOTS / name / 'auth.json').exists():
-            messagebox.showinfo('use', '请先在下方选中一个有效槽位。', parent=self)
+            messagebox.showinfo('use', T('请先在下方选中一个有效槽位。',
+                                        'Select a valid slot in the table first.'), parent=self)
             return
+        q = self.quota.get(name) or {}
+        wk = str(q.get('s', '')).replace('%', '')
+        if name in self.reached or (wk.isdigit() and int(wk) >= 95):
+            if not messagebox.askyesno(
+                    'use',
+                    T('警告: 该账号当前已打满或周额度≥95% (红行), 切过去 Codex 大概率仍不可用!\n'
+                      '(依据上次 Status 查询) 仍要切换吗?',
+                      'Warning: this account is maxed out or weekly >= 95% (red row); '
+                      'Codex will likely stay blocked.\n(based on the last Status query) '
+                      'Switch anyway?'), parent=self):
+                return
         try:
             live_acc = pool.account_id(pool.load_auth(LIVE)) if LIVE.exists() else None
         except Exception:

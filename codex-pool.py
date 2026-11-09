@@ -226,9 +226,12 @@ def note_switch():
 
 def codex_running():
     # Codex Desktop(MSIX)宿主是 ChatGPT.exe, 会孵化/复活 codex.exe, 两个都要查
-    r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
-                       capture_output=True,
-                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
+                           capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        return True  # 查询挂起时保守视为在运行, 拒绝切换
     out = r.stdout.lower()
     return b'codex.exe' in out or b'chatgpt.exe' in out
 
