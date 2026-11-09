@@ -173,6 +173,12 @@ sudo systemctl enable --now codex-pool-monitor
 
 - Windows only (process control via taskkill/tasklist; proxy detection reads
   the registry).
+- **Inherent cost of multi-account use**: Codex binds conversation threads and
+  their project grouping to the account that created them (each session file
+  carries a creator_account_id). After switching accounts, threads created by
+  the previous account appear under the "Other" group (nothing is lost);
+  switch back to restore the grouping, or open new threads from the project
+  folder to rebind them to the current account.
 - The quota endpoint (`chatgpt.com/backend-api/codex/usage`) is unofficial;
   field changes may break the quota columns (pool core features are unaffected).
 

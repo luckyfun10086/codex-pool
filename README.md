@@ -113,6 +113,10 @@ sudo systemctl enable --now codex-pool-monitor
 ## 已知边界
 
 - 仅支持 Windows（进程管理用 taskkill/tasklist，代理探测读注册表）。
+- **多账号的固有代价**：Codex 的对话线程与"项目分组"跟随账号
+  （每个会话带 creator_account_id 标签）。切换账号后，旧账号创建的线程
+  会显示在"其它"分组下（数据未丢）；切回原账号即可恢复分组，或在当前
+  账号下于项目文件夹内开新线程重新建立归属。
 - 额度接口为非公开接口（`chatgpt.com/backend-api/codex/usage`），
   字段变动可能导致额度列显示异常（不影响号池核心功能）。
 
