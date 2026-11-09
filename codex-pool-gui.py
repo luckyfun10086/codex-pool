@@ -210,13 +210,14 @@ def fmt_dur(sec):
     sec = int(sec)
     d, h, m = sec // 86400, sec % 86400 // 3600, sec % 3600 // 60
     if d:
-        return f'{d}天{h}h'
+        return T(f'{d}天{h}h', f'{d}d{h}h')
     if h:
         return f'{h}h{m:02d}m'
     return f'{m}m'
 
 
-_WDAY = ('周一', '周二', '周三', '周四', '周五', '周六', '周日')
+_WDAY = {'zh': ('周一', '周二', '周三', '周四', '周五', '周六', '周日'),
+         'en': ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')}
 
 
 def fmt_reset(ts):
@@ -229,9 +230,9 @@ def fmt_reset(ts):
         return ''
     now = datetime.datetime.now()
     if dt.date() == now.date():
-        return f'今天 {dt:%H:%M}'
+        return T(f'今天 {dt:%H:%M}', f'Today {dt:%H:%M}')
     if 0 < (dt.date() - now.date()).days <= 7:
-        return f'{_WDAY[dt.weekday()]} {dt:%H:%M}'
+        return f'{_WDAY[_lang["v"]][dt.weekday()]} {dt:%H:%M}'
     return f'{dt:%m-%d %H:%M}'
 
 
@@ -285,10 +286,12 @@ def _codex_pids():
 def kill_err_hint():
     e = KILL_ERROR or ''
     if '拒绝访问' in e or 'denied' in e.lower() or 'access' in e.lower():
-        return ('(taskkill 被拒绝: Codex 可能以管理员身份在运行。'
-                '请手动退出 Codex 后再点切换, 或以管理员身份运行本 GUI。)')
+        return T('(taskkill 被拒绝: Codex 可能以管理员身份在运行。'
+                 '请手动退出 Codex 后再点切换, 或以管理员身份运行本 GUI。)',
+                 '(taskkill denied: Codex may be running elevated. '
+                 'Quit Codex manually before switching, or run this GUI as administrator.)')
     if e:
-        return f'(taskkill: {e[:80]})'
+        return T(f'(taskkill: {e[:80]})', f'(taskkill: {e[:80]})')
     return ''
 
 
@@ -396,12 +399,14 @@ def decide_auto_switch(usage_map, current, threshold=100):
     """
     cur = usage_map.get(current)
     if cur is None:
-        return 'wait', None, '当前号用量查询失败, 本轮跳过'
+        return 'wait', None, T('当前号用量查询失败, 本轮跳过',
+                               'usage query failed for the current account; skipping this round')
     pri = cur.get('primary')
     blocked = bool(cur.get('reached')) or (pri is not None and pri >= threshold)
     if not blocked:
-        p_txt = f'{pri:.0f}%' if pri is not None else '无5h窗口'
-        return 'wait', None, f'当前号 5h {p_txt}, 未达切换条件'
+        p_txt = f'{pri:.0f}%' if pri is not None else T('无5h窗口', 'no 5h window')
+        return 'wait', None, T(f'当前号 5h {p_txt}, 未达切换条件',
+                               f'current account 5h {p_txt}; switch condition not met')
     best, best_key = None, None
     for name, u in sorted(usage_map.items()):
         if name == current or u is None or u.get('reached'):
@@ -417,9 +422,11 @@ def decide_auto_switch(usage_map, current, threshold=100):
         if best_key is None or key < best_key:
             best, best_key = name, key
     if best is None:
-        return 'blocked_all', None, '全部账号均不可用(打满/凭证失效)'
-    why = '已打满' if cur.get('reached') else f'达{threshold}%阈值'
-    return 'switch', best, f'当前号{why}'
+        return 'blocked_all', None, T('全部账号均不可用(打满/凭证失效)',
+                                      'no account available (maxed out / invalid credentials)')
+    why = (T('已打满', 'maxed out') if cur.get('reached')
+           else T(f'达{threshold}%阈值', f'hit {threshold}% threshold'))
+    return 'switch', best, T(f'当前号{why}', f'current account {why}')
 
 
 def find_codex_appid():
@@ -433,6 +440,34 @@ def find_codex_appid():
         return r.stdout.decode('utf-8', errors='replace').strip() or None
     except Exception:
         return None
+
+
+# ---------- 界面语言 (中/英) ----------
+_lang = {'v': 'zh'}
+
+
+def T(zh, en):
+    """内联双语: T('中文', 'English'), 由 _lang 决定取值。"""
+    return zh if _lang['v'] == 'zh' else en
+
+
+def load_lang():
+    try:
+        v = load_meta().get('lang') or 'zh'
+        _lang['v'] = v if v in ('zh', 'en') else 'zh'
+    except Exception:
+        _lang['v'] = 'zh'
+
+
+def save_lang(v):
+    v = v if v in ('zh', 'en') else 'zh'
+    meta = load_meta()
+    meta['lang'] = v
+    save_meta(meta)
+    _lang['v'] = v
+
+
+load_lang()
 
 
 # ---------- GUI ----------
@@ -457,37 +492,50 @@ class App(tk.Tk):
         self._closing = False
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         threading.Thread(target=self._auto_loop, daemon=True).start()
-        self._emit('就绪。流程: [add] 隔离当前号 → 启动 Codex 登录新号 → [get] 收取入池。')
+        self._emit(T('就绪。流程: [add] 隔离当前号 → 启动 Codex 登录新号 → [get] 收取入池。',
+                 'Ready. Flow: [add] isolate current login -> log a new account in Codex -> [get] capture.'))
 
     # -- 界面 --
     def _build(self):
         top = ttk.Frame(self, padding=(10, 8))
         top.pack(fill='x')
-        self.btn_add = ttk.Button(top, text='add  登录新号(隔离当前)',
+        self.btn_add = ttk.Button(top, text=T('add  登录新号(隔离当前)',
+                                              'add  Login new (isolate)'),
                                   command=self.on_add, width=24)
-        self.btn_get = ttk.Button(top, text='get  收取刚登录的号',
+        self.btn_get = ttk.Button(top, text=T('get  收取刚登录的号',
+                                              'get  Capture new login'),
                                   command=self.on_get, width=24)
-        self.btn_status = ttk.Button(top, text='Status  查额度(5h/周)+订阅',
+        self.btn_status = ttk.Button(top, text=T('Status  查额度(5h/周)+订阅',
+                                                 'Status  Quota (5h/wk)'),
                                      command=self.on_status, width=24)
-        self.btn_use = ttk.Button(top, text='use  切换到该账号',
+        self.btn_use = ttk.Button(top, text=T('use  切换到该账号',
+                                              'use  Switch to it'),
                                   command=self.on_use, width=20)
-        self.btn_import = ttk.Button(top, text='import  导入JSON',
+        self.btn_import = ttk.Button(top, text=T('import  导入JSON',
+                                                 'import  Import JSON'),
                                      command=self.on_import, width=16)
-        self.btn_rm = ttk.Button(top, text='rm  删除(入回收站)', command=self.on_rm,
-                                 width=20)
-        self.btn_trash = ttk.Button(top, text='trash  回收站', command=self.on_trash,
-                                    width=14)
-        self.btn_refresh = ttk.Button(top, text='Refresh  刷新', command=self.on_refresh,
-                                      width=14)
-        self.btn_proxy = ttk.Button(top, text='proxy  代理', command=self.on_proxy,
-                                    width=12)
-        self.btn_auto = ttk.Button(top, text='auto  自动切换',
+        self.btn_rm = ttk.Button(top, text=T('rm  删除(入回收站)',
+                                             'rm  Delete (trash)'),
+                                 command=self.on_rm, width=20)
+        self.btn_trash = ttk.Button(top, text=T('trash  回收站',
+                                                'trash  Recycle bin'),
+                                    command=self.on_trash, width=14)
+        self.btn_refresh = ttk.Button(top, text=T('Refresh  刷新',
+                                                  'Refresh'),
+                                      command=self.on_refresh, width=14)
+        self.btn_proxy = ttk.Button(top, text=T('proxy  代理', 'proxy'),
+                                    command=self.on_proxy, width=12)
+        self.btn_auto = ttk.Button(top, text=T('auto  自动切换',
+                                               'auto  Auto-switch'),
                                    command=self.on_auto, width=14)
+        self.btn_lang = ttk.Button(top, text=T('中/EN', '中/EN'),
+                                   command=self.on_lang, width=8)
         for i, b in enumerate((self.btn_add, self.btn_get, self.btn_status,
                                self.btn_use)):
             b.grid(row=0, column=i, padx=(0, 8), pady=(0, 4))
         for i, b in enumerate((self.btn_import, self.btn_rm, self.btn_trash,
-                               self.btn_refresh, self.btn_auto, self.btn_proxy)):
+                               self.btn_refresh, self.btn_auto, self.btn_proxy,
+                               self.btn_lang)):
             b.grid(row=1, column=i, padx=(0, 8))
         top.columnconfigure(4, weight=1)
 
@@ -500,21 +548,24 @@ class App(tk.Tk):
 
         mid = ttk.Frame(self, padding=(10, 0))
         mid.pack(fill='x')
-        ttk.Label(mid, text='操作日志:').pack(anchor='w')
+        self.lbl_log_title = ttk.Label(mid, text=T('操作日志:', 'Activity log:'))
+        self.lbl_log_title.pack(anchor='w')
         self.txt = tk.Text(mid, height=7, wrap='word', state='disabled',
                            background='#fafafa')
         self.txt.pack(fill='x')
 
-        ttk.Label(self, text='账号台(双击"密码/附加"列直接编辑; 选中行点 use 切换, Delete 键删除):',
-                  padding=(10, 6, 0, 2)).pack(anchor='w')
+        self.lbl_hint = ttk.Label(
+            self, padding=(10, 6, 0, 2),
+            text=T('账号台(双击"密码/附加"列直接编辑; 选中行点 use 切换, Delete 键删除):',
+                   'Accounts (double-click Password/Note cells to edit; '
+                   'select a row then use to switch, Del to remove):'))
+        self.lbl_hint.pack(anchor='w')
         bottom = ttk.Frame(self, padding=(10, 0, 10, 10))
         bottom.pack(fill='both', expand=True)
         cols = ('slot', 'email', 'pwd', 'note', 'plan', 'until', 'q5', 'q5r', 'qw', 'qwr', 'card', 'state')
         self.tree = ttk.Treeview(bottom, columns=cols, show='headings')
-        heads = ('槽位', '邮箱', '密码', '附加', '套餐', '订阅至',
-                 '5h额度', '5h重置于', '周额度', '周重置于', '重置卡', '凭证状态')
         widths = (44, 190, 76, 130, 50, 86, 58, 92, 58, 92, 56, 126)
-        for c, h, w in zip(cols, heads, widths):
+        for c, h, w in zip(cols, self._head_texts(), widths):
             self.tree.heading(c, text=h)
             self.tree.column(c, width=w, anchor='w',
                              stretch=(c in ('email', 'state')))
@@ -528,6 +579,45 @@ class App(tk.Tk):
         self.tree.bind('<<TreeviewSelect>>', self.on_select)
         self.tree.bind('<Double-1>', self.on_row_double)
         self.tree.bind('<Delete>', lambda _e: self.on_rm())
+
+    @staticmethod
+    def _head_texts():
+        return (T('槽位', 'Slot'), T('邮箱', 'Email'), T('密码', 'Password'),
+                T('附加', 'Note'), T('套餐', 'Plan'), T('订阅至', 'Sub until'),
+                T('5h额度', '5h used'), T('5h重置于', '5h resets'),
+                T('周额度', 'Wk used'), T('周重置于', 'Wk resets'),
+                T('重置卡', 'Reset credits'), T('凭证状态', 'Token status'))
+
+    def _apply_lang(self):
+        """切换语言后重绘全部静态文本。"""
+        self.title(T('Codex 号池控制台', 'Codex Pool Console'))
+        self.btn_add.configure(text=T('add  登录新号(隔离当前)', 'add  Login new (isolate)'))
+        self.btn_get.configure(text=T('get  收取刚登录的号', 'get  Capture new login'))
+        self.btn_status.configure(text=T('Status  查额度(5h/周)+订阅', 'Status  Quota (5h/wk)'))
+        self.btn_use.configure(text=T('use  切换到该账号', 'use  Switch to it'))
+        self.btn_import.configure(text=T('import  导入JSON', 'import  Import JSON'))
+        self.btn_rm.configure(text=T('rm  删除(入回收站)', 'rm  Delete (trash)'))
+        self.btn_trash.configure(text=T('trash  回收站', 'trash  Recycle bin'))
+        self.btn_refresh.configure(text=T('Refresh  刷新', 'Refresh'))
+        self.btn_proxy.configure(text=T('proxy  代理', 'proxy'))
+        self.btn_auto.configure(text=T('auto  自动切换', 'auto  Auto-switch'))
+        cols = ('slot', 'email', 'pwd', 'note', 'plan', 'until', 'q5', 'q5r',
+                'qw', 'qwr', 'card', 'state')
+        for c, h in zip(cols, self._head_texts()):
+            self.tree.heading(c, text=h)
+        self.lbl_log_title.configure(text=T('操作日志:', 'Activity log:'))
+        self.lbl_hint.configure(
+            text=T('账号台(双击"密码/附加"列直接编辑; 选中行点 use 切换, Delete 键删除):',
+                   'Accounts (double-click Password/Note cells to edit; '
+                   'select a row then use to switch, Del to remove):'))
+        self.refresh_table()
+        self.show_live_summary()
+
+    def on_lang(self):
+        save_lang('en' if _lang['v'] == 'zh' else 'zh')
+        self._apply_lang()
+        self._emit(T(f'界面语言已切换为中文。', 'UI language switched to English.'))
+
 
     # -- 线程通信 --
     def _emit(self, msg, kind='log'):
@@ -561,7 +651,7 @@ class App(tk.Tk):
         for b in (self.btn_add, self.btn_get, self.btn_status,
                   self.btn_use, self.btn_rm, self.btn_trash,
                   self.btn_refresh, self.btn_import, self.btn_auto,
-                  self.btn_proxy):
+                  self.btn_proxy, self.btn_lang):
             b.configure(state=state)
 
     def selected_slot(self):
@@ -576,18 +666,18 @@ class App(tk.Tk):
             f = SLOTS / name / 'auth.json'
             if not f.exists():
                 self.tree.insert('', 'end', iid=name,
-                                 values=(name, '(空槽位)', '', '', '', '', '', ''))
+                                 values=(name, T('(空槽位)', '(empty)'), '', '', '', '', '', ''))
                 continue
             try:
                 auth = pool.load_auth(f)
                 email, plan, until, exp = pool.describe(auth)
                 now = time.time()
                 if exp_epoch(auth) == 0:
-                    state = '损坏'
+                    state = T('损坏', 'corrupt')
                 elif exp_epoch(auth) < now:
-                    state = 'token过期(点Status可刷新)'
+                    state = T('token过期(点Status可刷新)', 'token expired (click Status to refresh)')
                 else:
-                    state = f'有效至 {exp[5:16]}'
+                    state = T(f'有效至 {exp[5:16]}', f'valid till {exp[5:16]}')
                 q = self.quota.get(name)
                 if isinstance(q, dict):
                     p, s = q.get('p', ''), q.get('s', '')
@@ -615,23 +705,27 @@ class App(tk.Tk):
                     CURRENT.write_text(slot, encoding='utf-8')  # 标记自愈
                 if slot:
                     self.lbl_live.configure(
-                        text=f'当前登录: {email} ({plan}, 订阅至 {until})  [槽位 {slot}]',
+                        text=T(f'当前登录: {email} ({plan}, 订阅至 {until})  [槽位 {slot}]',
+                               f'Logged in: {email} ({plan}, sub until {until})  [slot {slot}]'),
                         foreground='#0a5')
                 else:
                     self.lbl_live.configure(
-                        text=f'当前登录: {email} ({plan}, 订阅至 {until})  '
-                             f'[未入池 → 建议点 get 收取]',
+                        text=T(f'当前登录: {email} ({plan}, 订阅至 {until})  [未入池 → 建议点 get 收取]',
+                               f'Logged in: {email} ({plan}, sub until {until})  [NOT in pool -> press get]'),
                         foreground='#b60')
             except Exception:
-                self.lbl_live.configure(text='当前登录: auth.json 无法解析',
+                self.lbl_live.configure(text=T('当前登录: auth.json 无法解析', 'Logged in: auth.json unreadable'),
                                         foreground='#c00')
         else:
-            self.lbl_live.configure(text='当前登录: 未登录(可启动 Codex 登录新号)',
+            self.lbl_live.configure(text=T('当前登录: 未登录(可启动 Codex 登录新号)',
+                                          'Not logged in (start Codex to log a new account in)'),
                                     foreground='#b60')
         try:
             pend = json.loads(PENDING.read_text(encoding='utf-8'))
-            self.lbl_pending.configure(text=f"待收取 → 槽位 [{pend.get('slot')}]"
-                                            f" (于 {pend.get('time','')})", foreground='#b60')
+            self.lbl_pending.configure(text=T(f"待收取 → 槽位 [{pend.get('slot')}]"
+                                            f" (于 {pend.get('time','')})",
+                                            f"Pending capture -> slot [{pend.get('slot')}]"
+                                            f" (at {pend.get('time','')})"), foreground='#b60')
         except Exception:
             self.lbl_pending.configure(text='', foreground='#b60')
 
@@ -641,7 +735,8 @@ class App(tk.Tk):
             return
         f = SLOTS / name / 'auth.json'
         if not f.exists():
-            self._emit(f'槽位 [{name}] 是空槽位, add 时会自动用作目标。')
+            self._emit(T(f'槽位 [{name}] 是空槽位, add 时会自动用作目标。',
+                       f'Slot [{name}] is empty; add will use it as the target.'))
             return
         try:
             email, plan, until, exp = pool.describe(pool.load_auth(f))
@@ -657,7 +752,7 @@ class App(tk.Tk):
                            if q.get('cards') is not None else ''))
             self._emit(msg)
         except Exception:
-            self._emit(f'槽位 [{name}] 凭证文件损坏。')
+            self._emit(T(f'槽位 [{name}] 凭证文件损坏。', f'Slot [{name}]: credential file corrupt.'))
 
     def on_row_double(self, event):
         """双击 密码列/附加列 直接编辑对应字段; 其他列无动作(切换用 use)。"""
@@ -678,7 +773,9 @@ class App(tk.Tk):
         meta = load_meta()
         cur = meta.get(name, {}).get('password', '')
         pwd = simpledialog.askstring(
-            '设置密码', f'槽位 [{name}] 的账号密码(留空清除):', initialvalue=cur,
+            T('设置密码', 'Set password'),
+            T(f'槽位 [{name}] 的账号密码(留空清除):', f'Password for slot [{name}] (empty to clear):'),
+            initialvalue=cur,
             parent=self)
         if pwd is None:
             return
@@ -789,11 +886,13 @@ class App(tk.Tk):
             sel = self.selected_slot()
             target = (sel if sel and not (SLOTS / sel / 'auth.json').exists()
                       else pick_target_slot(None))
-            action = f'导入到空槽位 [{target}]'
+            action = T(f'导入到空槽位 [{target}]', f'Import into empty slot [{target}]')
         if not messagebox.askyesno(
-                '导入 JSON',
-                f'{action}\n\n{email} ({plan}, 订阅至 {until})\n'
-                f'token 到期 {exp}\n当前登录不受影响。继续?',
+                T('导入 JSON', 'Import JSON'),
+                T(f'{action}\n\n{email} ({plan}, 订阅至 {until})\n'
+                  f'token 到期 {exp}\n当前登录不受影响。继续?',
+                  f'{action}\n\n{email} ({plan}, sub until {until})\n'
+                  f'token expires {exp}\nCurrent login is NOT affected. Continue?'),
                 parent=self):
             return
 
@@ -812,9 +911,11 @@ class App(tk.Tk):
                 save_meta(meta)
                 self.quota.pop(target, None)
                 self.reached.discard(target)
-                verb = '刷新' if existing else '导入'
-                self._emit(f'已{verb} → 槽位 [{target}]: {email} ({plan}, 订阅至 {until})。'
-                           f'当前登录未变, 点 Status 可验证凭证活性与额度。')
+                verb = T('刷新', 'refreshed') if existing else T('导入', 'imported')
+                self._emit(T(f'已{verb} → 槽位 [{target}]: {email} ({plan}, 订阅至 {until})。'
+                             f'当前登录未变, 点 Status 可验证凭证活性与额度。',
+                             f'{verb} -> slot [{target}]: {email} ({plan}, sub until {until}). '
+                             f'Current login unchanged; press Status to verify the credential.'))
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -871,9 +972,11 @@ class App(tk.Tk):
                 meta = load_meta()
                 meta.setdefault(target, {})['email'] = email
                 save_meta(meta)
-                action = '刷新' if existing else '收取'
-                self._emit(f'已{action} → 槽位 [{target}]: {email} ({plan}, 订阅至 {until})。'
-                           f'当前 Desktop 登录就是它, 无需重启。')
+                action = T('刷新', 'refreshed') if existing else T('收取', 'captured')
+                self._emit(T(f'已{action} → 槽位 [{target}]: {email} ({plan}, 订阅至 {until})。'
+                             f'当前 Desktop 登录就是它, 无需重启。',
+                             f'{action} -> slot [{target}]: {email} ({plan}, sub until {until}). '
+                             f'It is the current Desktop login; no restart needed.'))
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -923,9 +1026,11 @@ class App(tk.Tk):
                     meta = load_meta()
                     meta.setdefault(cap_slot, {})['email'] = pool.describe(live_auth)[0]
                     save_meta(meta)
-                    self._emit(f'防护: 当前号已先收进槽位 [{cap_slot}]。')
+                    self._emit(T(f'防护: 当前号已先收进槽位 [{cap_slot}]。',
+                                 f'Guard: current login captured into slot [{cap_slot}] first.'))
                 except Exception as e:
-                    self._emit(f'自动收取失败({e}), 已中止切换 — 请先手动点 get。')
+                    self._emit(T(f'自动收取失败({e}), 已中止切换 — 请先手动点 get。',
+                                 f'Auto-capture failed ({e}); switch aborted - press get manually.'))
                     return
             ok, msg = self._perform_switch(name, '手动')
             self._emit(msg)
@@ -954,15 +1059,19 @@ class App(tk.Tk):
                 time.sleep(60)
 
     def _auto_tick(self, cfg):
-        label = '自动切换: ' + ('影子模式(只告警)' if cfg['mode'] == 'shadow' else '执行模式')
+        label = T('自动切换: ', 'Auto-switch: ') + (
+            T('影子模式(只告警)', 'SHADOW (alert only)') if cfg['mode'] == 'shadow'
+            else T('执行模式', 'EXEC'))
         try:
             if PENDING.exists():
-                self._auto_note(label + ' · 暂停: 存在待收标记(add 进行中)')
+                self._auto_note(label + T(' · 暂停: 存在待收标记(add 进行中)',
+                                         ' · paused: pending capture marker exists (add in progress)'))
                 self._auto_next_check = time.time() + 60
                 return
             cur = pool.read_current()
             if not cur or not (SLOTS / cur / 'auth.json').exists():
-                self._auto_note(label + ' · 暂停: 当前槽位无效')
+                self._auto_note(label + T(' · 暂停: 当前槽位无效',
+                                         ' · paused: current slot invalid'))
                 self._auto_next_check = time.time() + 60
                 return
             if pool.cooldown_remaining() > 0:
@@ -972,7 +1081,8 @@ class App(tk.Tk):
                 try:
                     live_acc = pool.account_id(pool.load_auth(LIVE))
                     if live_acc and not pool.find_slot_by_account(live_acc):
-                        self._auto_note(label + ' · 暂停: 当前登录未入池(先点 get)')
+                        self._auto_note(label + T(' · 暂停: 当前登录未入池(先点 get)',
+                                                 ' · paused: current login not in pool (press get)'))
                         self._auto_next_check = time.time() + 120
                         return
                 except Exception:
@@ -989,8 +1099,9 @@ class App(tk.Tk):
                         save_auth(f, auth)
                     u = fetch_usage(auth)
                     usage_map[name] = u
-                    p_txt = f"{u['primary']:.0f}%" if u['primary'] is not None else '无'
-                    s_txt = f"{u['secondary']:.0f}%" if u['secondary'] is not None else '无'
+                    _na = T('无', 'n/a')
+                    p_txt = f"{u['primary']:.0f}%" if u['primary'] is not None else _na
+                    s_txt = f"{u['secondary']:.0f}%" if u['secondary'] is not None else _na
                     self.quota[name] = {'p': p_txt, 's': s_txt,
                                         'pr': u['primary_reset_at'],
                                         'sr': u['secondary_reset_at'],
@@ -1010,14 +1121,19 @@ class App(tk.Tk):
                 now = time.time()
                 self._auto_times = [t for t in self._auto_times if now - t < 3600]
                 if len(self._auto_times) >= cfg['max_per_hour']:
-                    self._auto_note(f'{label} · 已达每小时上限({cfg["max_per_hour"]}), '
-                                    f'本轮不切: {reason}')
+                    self._auto_note(f'{label}' + T(f' · 已达每小时上限({cfg["max_per_hour"]}), '
+                                                   f'本轮不切: {reason}',
+                                                   f' · hourly cap reached ({cfg["max_per_hour"]}); '
+                                                   f'not switching this round: {reason}'))
                     return
                 if cfg['mode'] == 'shadow':
-                    self._auto_note(f'{label} · [影子] {reason}, '
-                                    f'拟切换 [{cur}] → [{target}] (仅告警不执行)')
+                    self._auto_note(f'{label}' + T(f' · [影子] {reason}, '
+                                                   f'拟切换 [{cur}] → [{target}] (仅告警不执行)',
+                                                   f' · [shadow] {reason}; would switch '
+                                                   f'[{cur}] -> [{target}] (alert only)'))
                 else:
-                    self._auto_note(f'{label} · {reason}, 正在切换 [{cur}] → [{target}] ...')
+                    self._auto_note(f'{label}' + T(f' · {reason}, 正在切换 [{cur}] → [{target}] ...',
+                                                   f' · {reason}; switching [{cur}] -> [{target}] ...'))
                     self.busy = True
                     self._emit(None, 'busy')
                     try:
@@ -1034,7 +1150,9 @@ class App(tk.Tk):
                           for u in usage_map.values() if u]
                 resets = [r for r in resets if r]
                 when = fmt_reset(min(resets)) if resets else '?'
-                self._auto_note(f'{label} · 全部账号不可用(打满/失效), 最早重置于 {when}, 等待中。')
+                self._auto_note(f'{label}' + T(f' · 全部账号不可用(打满/失效), 最早重置于 {when}, 等待中。',
+                                               f' · all accounts unavailable (maxed/invalid); '
+                                               f'earliest reset at {when}; waiting.'))
         except Exception:
             log('auto tick 异常: ' + traceback.format_exc())
             self._auto_next_check = time.time() + 300
@@ -1044,60 +1162,74 @@ class App(tk.Tk):
         if appid:
             try:
                 subprocess.Popen(['explorer.exe', f'shell:AppsFolder\\{appid}'])
-                self._emit('[自动] 已尝试重新启动 Codex Desktop。')
+                self._emit(T('[自动] 已尝试重新启动 Codex Desktop。',
+                             '[auto] Attempted to relaunch Codex Desktop.'))
                 return
             except Exception:
                 pass
-        self._emit('[自动] 未能自动重启 Codex Desktop, 请手动打开。')
+        self._emit(T('[自动] 未能自动重启 Codex Desktop, 请手动打开。',
+                     '[auto] Could not relaunch Codex Desktop automatically; open it manually.'))
 
     def on_auto(self):
         cfg = load_auto_cfg()
         win = tk.Toplevel(self)
-        win.title('自动切换设置')
+        win.title(T('自动切换设置', 'Auto-switch settings'))
         win.geometry('440x330')
         win.grab_set()
         frm = ttk.Frame(win, padding=12)
         frm.pack(fill='both', expand=True)
         mode = tk.StringVar(value=cfg['mode'])
-        ttk.Label(frm, text='模式:').pack(anchor='w')
-        for val, txt in (('off', '关闭 — 不自动切换'),
-                         ('shadow', '影子 — 只检测告警, 不执行(建议先跑几天)'),
-                         ('exec', '执行 — 打满自动切换, 并尝试重启 Codex')):
+        ttk.Label(frm, text=T('模式:', 'Mode:')).pack(anchor='w')
+        for val, txt in (('off', T('关闭 — 不自动切换', 'Off — no auto switching')),
+                         ('shadow', T('影子 — 只检测告警, 不执行(建议先跑几天)',
+                                      'Shadow — detect & alert only (recommended first)')),
+                         ('exec', T('执行 — 打满自动切换, 并尝试重启 Codex',
+                                    'Exec — auto-switch when maxed, relaunch Codex'))):
             ttk.Radiobutton(frm, value=val, text=txt, variable=mode).pack(anchor='w', padx=(10, 0))
         row = ttk.Frame(frm)
         row.pack(fill='x', pady=(10, 0))
-        ttk.Label(row, text='触发阈值(5h用量%):').pack(side='left')
+        ttk.Label(row, text=T('触发阈值(5h用量%):', 'Trigger threshold (5h %):')).pack(side='left')
         thr = tk.IntVar(value=cfg['threshold'])
         ttk.Spinbox(row, from_=80, to=100, textvariable=thr, width=6).pack(side='left', padx=(6, 0))
-        ttk.Label(row, text='每小时最多切换:').pack(side='left', padx=(12, 0))
+        ttk.Label(row, text=T('每小时最多切换:', 'Max switches/hour:')).pack(side='left', padx=(12, 0))
         mph = tk.IntVar(value=cfg['max_per_hour'])
         ttk.Spinbox(row, from_=1, to=6, textvariable=mph, width=6).pack(side='left', padx=(6, 0))
         relaunch = tk.BooleanVar(value=cfg['relaunch'])
-        ttk.Checkbutton(frm, text='切换后尝试自动重启 Codex Desktop',
+        ttk.Checkbutton(frm, text=T('切换后尝试自动重启 Codex Desktop',
+                                    'Try to relaunch Codex Desktop after switching'),
                         variable=relaunch).pack(anchor='w', pady=(8, 0))
         ttk.Label(frm, foreground='#777', wraplength=400, text=(
-            '检查间隔自动分层: 5h<50% 每30分 / 50-80% 每10分 / >80% 每5分。\n'
-            '选号策略: 周额度最低者优先(排除周>95%与失效号); 触发默认100%=真打满才切,\n'
-            '调低可提前切换但可能打断进行中的任务。')).pack(anchor='w', pady=(8, 0))
+            T('检查间隔自动分层: 5h<50% 每30分 / 50-80% 每10分 / >80% 每5分。\n'
+              '选号策略: 周额度最低者优先(排除周>95%与失效号); 触发默认100%=真打满才切,\n'
+              '调低可提前切换但可能打断进行中的任务。',
+              'Check interval is tiered: 5h<50% every 30min / 50-80% every 10min / >80% every 5min.\n'
+              'Selection: lowest weekly usage first (excludes weekly>95% and invalid).\n'
+              'Default trigger 100% = switch only when truly maxed; lower it to switch '
+              'earlier at the risk of interrupting work.'))
+        ).pack(anchor='w', pady=(8, 0))
 
         def save():
             save_auto_cfg({'mode': mode.get(), 'threshold': int(thr.get()),
                            'max_per_hour': int(mph.get()),
                            'relaunch': bool(relaunch.get())})
             self._auto_next_check = 0.0
-            m = {'off': '已关闭', 'shadow': '影子模式(只告警)', 'exec': '执行模式'}[mode.get()]
-            self._emit(f'自动切换设置已保存: {m}, 阈值 {thr.get()}%, 每小时上限 {mph.get()}。')
-            self._auto_note(f'自动切换: {m}' if mode.get() != 'off' else '')
+            m = {'off': T('已关闭', 'off'), 'shadow': T('影子模式(只告警)', 'shadow (alert only)'),
+                 'exec': T('执行模式', 'exec')}[mode.get()]
+            self._emit(T(f'自动切换设置已保存: {m}, 阈值 {thr.get()}%, 每小时上限 {mph.get()}。',
+                         f'Auto-switch settings saved: {m}, threshold {thr.get()}%, '
+                         f'max {mph.get()}/hour.'))
+            self._auto_note(T(f'自动切换: {m}', f'Auto-switch: {m}') if mode.get() != 'off' else '')
             win.destroy()
 
-        ttk.Button(frm, text='保存', command=save).pack(pady=(10, 0))
+        ttk.Button(frm, text=T('保存', 'Save'), command=save).pack(pady=(10, 0))
 
     def _perform_switch(self, name, source='manual'):
         """一次完整受保护切换: 冷却→锁→退Codex→备份→换入→校验。
         须在后台线程调用(on_use 与自动切换共用)。返回 (ok, msg)。"""
         cd = pool.cooldown_remaining()
         if cd > 0:
-            return False, f'冷却中: 请等 {int(cd) + 1} 秒再切换(防连切)。'
+            return False, T(f'冷却中: 请等 {int(cd) + 1} 秒再切换(防连切)。',
+                            f'Cooldown: wait {int(cd) + 1}s before switching.')
         if not pool.acquire_lock():
             return False, '另一个切换操作正在进行(GUI 或 CLI), 已中止。'
         try:
@@ -1110,26 +1242,31 @@ class App(tk.Tk):
                 try:
                     if pool.account_id(pool.load_auth(LIVE)) == target_acc:
                         CURRENT.write_text(name, encoding='utf-8')
-                        return True, f'槽位 [{name}] 已是当前登录, 无需切换(幂等)。'
+                        return True, T(f'槽位 [{name}] 已是当前登录, 无需切换(幂等)。',
+                                       f'Slot [{name}] is already the current login; no switch needed.')
                 except Exception:
                     pass
                 pool.backup_file(LIVE, f'live-before-use{name}')
                 pool.sync_live_to_current_slot()
             pool.write_auth_atomic(target_auth, LIVE)
             if not pool.verify_live(target_acc):
-                return False, ('校验失败: live auth.json 与目标账号不符, 已中止'
-                               '(改动前的文件已备份在 backups/)。')
+                return False, T('校验失败: live auth.json 与目标账号不符, 已中止'
+                                '(改动前的文件已备份在 backups/)。',
+                                'Verification failed: live auth.json does not match the target '
+                                'account; aborted (previous file backed up in backups/).')
             CURRENT.write_text(name, encoding='utf-8')
             pool.note_switch()
             self._emit(None, 'refresh')
-            return True, f'已切换到槽位 [{name}]({source})。重新打开 Codex Desktop 生效。'
+            return True, T(f'已切换到槽位 [{name}]({source})。重新打开 Codex Desktop 生效。',
+                           f'Switched to slot [{name}] ({source}). Reopen Codex Desktop to take effect.')
         finally:
             pool.release_lock()
 
     def on_rm(self):
         name = self.selected_slot()
         if not name or not (SLOTS / name).exists():
-            messagebox.showinfo('rm', '请先在下方选中要删除的槽位。', parent=self)
+            messagebox.showinfo('rm', T('请先在下方选中要删除的槽位。',
+                                       'Select a slot to delete first.'), parent=self)
             return
         try:
             live_same = LIVE.exists() and pool.account_id(pool.load_auth(LIVE)) == \
@@ -1138,13 +1275,17 @@ class App(tk.Tk):
             live_same = False
         if live_same:
             messagebox.showwarning(
-                'rm  受保护',
-                f'槽位 [{name}] 是当前正在登录的号, 受保护不可删除。\n\n'
-                f'先 use 切换到其他槽位, 或点 add 隔离当前登录后再删。',
+                T('rm  受保护', 'rm  protected'),
+                T(f'槽位 [{name}] 是当前正在登录的号, 受保护不可删除。\n\n'
+                  f'先 use 切换到其他槽位, 或点 add 隔离当前登录后再删。',
+                  f'Slot [{name}] is the currently logged-in account and is protected.\n\n'
+                  f'use another slot first, or add to isolate the current login, then delete.'),
                 parent=self)
             return
         if not messagebox.askyesno(
-                'rm  删除', f'把槽位 [{name}] 移入回收站?\n(回收站可随时恢复, 不直接删除)',
+                T('rm  删除', 'rm  delete'),
+                T(f'把槽位 [{name}] 移入回收站?\n(回收站可随时恢复, 不直接删除)',
+                  f'Move slot [{name}] to the recycle bin?\n(restorable at any time, not deleted)'),
                 parent=self):
             return
 
@@ -1168,7 +1309,8 @@ class App(tk.Tk):
                 save_meta(m)
                 self.quota.pop(name, None)
                 self.reached.discard(name)
-                self._emit(f'槽位 [{name}] 已移入回收站, 可点 [trash 回收站] 恢复。')
+                self._emit(T(f'槽位 [{name}] 已移入回收站, 可点 [trash 回收站] 恢复。',
+                             f'Slot [{name}] moved to the recycle bin; restore via [trash].'))
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -1179,11 +1321,13 @@ class App(tk.Tk):
         self.refresh_table()
         self.show_live_summary()
         n = len([s for s in slot_names() if (SLOTS / s / 'auth.json').exists()])
-        self._emit(f'已刷新: 池中 {n} 个账号。额度数字为上次查询结果, 联网更新请点 [Status]。')
+        self._emit(T(f'已刷新: 池中 {n} 个账号。额度数字为上次查询结果, 联网更新请点 [Status]。',
+                     f'Refreshed: {n} account(s) in pool. Quota numbers are from the last query; '
+                     f'press [Status] to update online.'))
 
     def on_trash(self):
         win = tk.Toplevel(self)
-        win.title('回收站 (删除的账号)')
+        win.title(T('回收站 (删除的账号)', 'Recycle bin (deleted accounts)'))
         win.geometry('580x330')
         frm = ttk.Frame(win, padding=8)
         frm.pack(fill='both', expand=True)
@@ -1213,7 +1357,7 @@ class App(tk.Tk):
                 items.append(d)
                 lb.insert('end', f'{d.name}   |   {email}')
             if not items:
-                lb.insert('end', '(回收站为空)')
+                lb.insert('end', T('(回收站为空)', '(recycle bin is empty)'))
 
         def restore():
             sel = lb.curselection()
@@ -1223,7 +1367,9 @@ class App(tk.Tk):
             name = d.name.split('__')[0]
             target = name if not (SLOTS / name).exists() else pick_target_slot(None)
             if not pool.acquire_lock():
-                messagebox.showwarning('回收站', '有切换操作进行中, 稍后再试。', parent=win)
+                messagebox.showwarning(T('回收站', 'Recycle bin'),
+                                       T('有切换操作进行中, 稍后再试。',
+                                         'A switch is in progress; try again later.'), parent=win)
                 return
             try:
                 sd = SLOTS / target
@@ -1244,12 +1390,15 @@ class App(tk.Tk):
                 self.reached.discard(target)
             finally:
                 pool.release_lock()
-            self._emit(f'已从回收站恢复 → 槽位 [{target}]。')
+            self._emit(T(f'已从回收站恢复 → 槽位 [{target}]。',
+                         f'Restored from recycle bin -> slot [{target}].'))
             self._emit(None, 'refresh')
             load()
 
         def purge():
-            if not messagebox.askyesno('回收站', '彻底清空回收站? 此操作不可恢复!',
+            if not messagebox.askyesno(T('回收站', 'Recycle bin'),
+                                       T('彻底清空回收站? 此操作不可恢复!',
+                                         'Purge the recycle bin completely? This cannot be undone!'),
                                        parent=win):
                 return
             if pool.TRASH.exists():
@@ -1258,12 +1407,12 @@ class App(tk.Tk):
                         shutil.rmtree(d, ignore_errors=True)
                     else:
                         d.unlink(missing_ok=True)
-            self._emit('回收站已清空(彻底删除)。')
+            self._emit(T('回收站已清空(彻底删除)。', 'Recycle bin purged (permanently deleted).'))
             load()
 
-        ttk.Button(btns, text='恢复到池中', command=restore).pack(side='left', padx=(0, 6))
-        ttk.Button(btns, text='清空回收站', command=purge).pack(side='left', padx=(0, 6))
-        ttk.Button(btns, text='关闭', command=win.destroy).pack(side='right')
+        ttk.Button(btns, text=T('恢复到池中', 'Restore to pool'), command=restore).pack(side='left', padx=(0, 6))
+        ttk.Button(btns, text=T('清空回收站', 'Purge'), command=purge).pack(side='left', padx=(0, 6))
+        ttk.Button(btns, text=T('关闭', 'Close'), command=win.destroy).pack(side='right')
         load()
 
     def on_proxy(self):
@@ -1272,8 +1421,9 @@ class App(tk.Tk):
         except Exception:
             cur = 'auto'
         val = simpledialog.askstring(
-            '代理设置',
-            '代理地址, 例如 http://127.0.0.1:7897\nauto=自动探测   none=强制直连',
+            T('代理设置', 'Proxy'),
+            T('代理地址, 例如 http://127.0.0.1:7897\nauto=自动探测   none=强制直连',
+              'Proxy URL, e.g. http://127.0.0.1:7897\nauto=auto-detect   none=force direct'),
             initialvalue=cur, parent=self)
         if val is None:
             return
@@ -1283,33 +1433,41 @@ class App(tk.Tk):
         global _opener
         _opener = None
         found = detect_proxy()
-        self._emit(f'代理设置: {val} → 实际使用: {found or "直连"}')
+        self._emit(T(f'代理设置: {val} → 实际使用: {found or "直连"}',
+                     f'Proxy setting: {val} -> using: {found or "direct"}'))
 
     def on_status(self):
         names = slot_names()
         targets = [n for n in names if (SLOTS / n / 'auth.json').exists()]
         if not targets:
-            self._emit('池子里还没有账号, 先 add/get。')
+            self._emit(T('池子里还没有账号, 先 add/get。',
+                         'The pool is empty; add/get an account first.'))
             return
 
         def work():
             proxy = detect_proxy()
-            self._emit('出口代理: ' + (f'{proxy} (自动探测)' if proxy else
-                                      '直连(未发现本机代理端口, 被拦时开系统代理/TUN或在proxy里手填)'))
-            self._emit(f'查询 {len(targets)} 个账号的额度(5h/周)...')
+            self._emit(T('出口代理: ', 'Egress proxy: ') +
+                       (f'{proxy} ' + T('(自动探测)', '(auto-detected)') if proxy else
+                        T('直连(未发现本机代理端口, 被拦时开系统代理/TUN或在proxy里手填)',
+                          'direct (no local proxy port found; enable system proxy/TUN or set it in proxy)')))
+            self._emit(T(f'查询 {len(targets)} 个账号的额度(5h/周)...',
+                         f'Querying 5h/weekly quota for {len(targets)} account(s)...'))
             for name in targets:
                 f = SLOTS / name / 'auth.json'
                 try:
                     auth = pool.load_auth(f)
                     email, plan, until, _ = pool.describe(auth)
                     if exp_epoch(auth) < time.time() + 120:
-                        self._emit(f'槽位 [{name}] {email}: token 过期, 正在刷新...')
+                        self._emit(T(f'槽位 [{name}] {email}: token 过期, 正在刷新...',
+                                     f'Slot [{name}] {email}: token expired, refreshing...'))
                         auth = refresh_auth(auth)
                         save_auth(f, auth)
-                        self._emit(f'槽位 [{name}]: token 已刷新。')
+                        self._emit(T(f'槽位 [{name}]: token 已刷新。',
+                                     f'Slot [{name}]: token refreshed.'))
                     u = fetch_usage(auth)
-                    p_txt = f"{u['primary']:.0f}%" if u['primary'] is not None else '无'
-                    s_txt = f"{u['secondary']:.0f}%" if u['secondary'] is not None else '无'
+                    _na = T('无', 'n/a')
+                    p_txt = f"{u['primary']:.0f}%" if u['primary'] is not None else _na
+                    s_txt = f"{u['secondary']:.0f}%" if u['secondary'] is not None else _na
                     self.quota[name] = {'p': p_txt, 's': s_txt,
                                         'pr': u['primary_reset_at'],
                                         'sr': u['secondary_reset_at'],
@@ -1318,18 +1476,26 @@ class App(tk.Tk):
                         self.reached.add(name)
                     else:
                         self.reached.discard(name)
-                    full = '  <-- 当前窗口已打满' if u['reached'] else ''
-                    cards = f" | 重置卡 {u.get('cards')}张(通用)" if u.get('cards') is not None else ''
-                    p_part = (f"5h {p_txt} (重置 {fmt_dur(u['primary_reset'])})"
-                              if u['primary'] is not None else '5h 无此窗口(仅周额度)')
-                    s_part = (f"周 {s_txt} (重置 {fmt_dur(u['secondary_reset'])})"
-                              if u['secondary'] is not None else '周 无此窗口')
-                    self._emit(f'槽位 [{name}] {email}: {p_part} | {s_part}{cards} | 订阅至 {until}{full}')
+                    full = T('  <-- 当前窗口已打满', '  <-- MAXED OUT') if u['reached'] else ''
+                    cards = (T(f" | 重置卡 {u.get('cards')}张(通用)",
+                               f" | reset credits: {u.get('cards')} (shared)")
+                             if u.get('cards') is not None else '')
+                    p_part = (T(f"5h {p_txt} (重置 {fmt_dur(u['primary_reset'])})",
+                                f"5h {p_txt} (resets in {fmt_dur(u['primary_reset'])})")
+                              if u['primary'] is not None else
+                              T('5h 无此窗口(仅周额度)', '5h no such window (weekly-only plan)'))
+                    s_part = (T(f"周 {s_txt} (重置 {fmt_dur(u['secondary_reset'])})",
+                                f"wk {s_txt} (resets in {fmt_dur(u['secondary_reset'])})")
+                              if u['secondary'] is not None else
+                              T('周 无此窗口', 'wk no such window'))
+                    self._emit(T(f'槽位 [{name}] {email}: {p_part} | {s_part}{cards} | 订阅至 {until}{full}',
+                                 f'Slot [{name}] {email}: {p_part} | {s_part}{cards} | sub until {until}{full}'))
                 except Exception as e:
                     self.quota[name] = {'err': http_err_short(e)}
-                    self._emit(f'槽位 [{name}] 查询失败: {http_err_short(e)}')
+                    self._emit(T(f'槽位 [{name}] 查询失败: {http_err_short(e)}',
+                                 f'Slot [{name}] query failed: {http_err_short(e)}'))
                 self._emit(None, 'refresh')
-            self._emit('额度查询完成。')
+            self._emit(T('额度查询完成。', 'Quota query finished.'))
 
         self.run_bg(work)
 

@@ -76,7 +76,11 @@ With the GUI it is even simpler: `add` → open Codex and log the new account in
 → `get` → done. Click `Status` to refresh quotas; select a row and click `use`
 to switch accounts.
 
-## GUI reference (the UI is in Chinese — use this cheat sheet)
+## GUI reference
+
+The UI is bilingual — press the `中/EN` button (bottom-right of the button
+rows) to switch between Chinese and English. The table below lists the Chinese
+labels in case you run it in Chinese:
 
 Buttons (top panel):
 
