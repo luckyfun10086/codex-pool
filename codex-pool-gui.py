@@ -352,6 +352,89 @@ def save_meta(meta):
     META.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
+# ---------- 自动切换 (思路参考 CodexPool: 动态间隔 + least_used + 阈值触发) ----------
+
+AUTO_DEFAULTS = {'mode': 'off', 'threshold': 100, 'max_per_hour': 3, 'relaunch': True}
+
+
+def load_auto_cfg():
+    cfg = dict(AUTO_DEFAULTS)
+    try:
+        cfg.update((load_meta().get('auto') or {}))
+    except Exception:
+        pass
+    cfg['threshold'] = max(80, min(100, int(cfg['threshold'])))
+    cfg['max_per_hour'] = max(1, min(6, int(cfg['max_per_hour'])))
+    cfg['relaunch'] = bool(cfg['relaunch'])
+    cfg['mode'] = cfg['mode'] if cfg['mode'] in ('off', 'shadow', 'exec') else 'off'
+    return cfg
+
+
+def save_auto_cfg(cfg):
+    meta = load_meta()
+    meta['auto'] = cfg
+    save_meta(meta)
+
+
+def auto_interval_sec(primary):
+    """动态检查间隔: 用量越高查得越频 (CodexPool 的三档策略)。"""
+    if primary is None:
+        return 30 * 60
+    if primary >= 80:
+        return 5 * 60
+    if primary >= 50:
+        return 10 * 60
+    return 30 * 60
+
+
+def decide_auto_switch(usage_map, current, threshold=100):
+    """纯决策: usage_map = {槽位: fetch_usage结果 或 None}。
+
+    触发: 当前号 limit_reached 或 5h 用量 >= threshold(默认100=真打满才切)。
+    选号: least_used —— 周额度优先(真正的稀缺资源), 5h 用量次之。
+    返回 (action, target, reason), action ∈ switch / wait / blocked_all。
+    """
+    cur = usage_map.get(current)
+    if cur is None:
+        return 'wait', None, '当前号用量查询失败, 本轮跳过'
+    pri = cur.get('primary')
+    blocked = bool(cur.get('reached')) or (pri is not None and pri >= threshold)
+    if not blocked:
+        p_txt = f'{pri:.0f}%' if pri is not None else '无5h窗口'
+        return 'wait', None, f'当前号 5h {p_txt}, 未达切换条件'
+    best, best_key = None, None
+    for name, u in sorted(usage_map.items()):
+        if name == current or u is None or u.get('reached'):
+            continue
+        p = u.get('primary')
+        if p is not None and p >= threshold:
+            continue
+        w = u.get('secondary')
+        if w is not None and w >= 95:
+            continue  # 周额度将触顶, 不作为候选
+        key = (0 if w is not None else 1, w if w is not None else 0,
+               p if p is not None else 0)
+        if best_key is None or key < best_key:
+            best, best_key = name, key
+    if best is None:
+        return 'blocked_all', None, '全部账号均不可用(打满/凭证失效)'
+    why = '已打满' if cur.get('reached') else f'达{threshold}%阈值'
+    return 'switch', best, f'当前号{why}'
+
+
+def find_codex_appid():
+    """查 MSIX Codex Desktop 的启动 AppID(版本无关), 供切换后自动重启。"""
+    try:
+        r = subprocess.run(
+            ['powershell', '-NoProfile', '-Command',
+             "Get-StartApps | Where-Object {$_.Name -like '*Codex*'} "
+             "| Select-Object -First 1 -ExpandProperty AppID"],
+            capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=20)
+        return r.stdout.decode('utf-8', errors='replace').strip() or None
+    except Exception:
+        return None
+
+
 # ---------- GUI ----------
 
 class App(tk.Tk):
@@ -368,6 +451,12 @@ class App(tk.Tk):
         self.refresh_table()
         self.show_live_summary()
         self.after(150, self._poll)
+        self._auto_times = []       # 自动切换时间戳(每小时上限用)
+        self._auto_next_check = 0.0
+        self._auto_last_note = ''
+        self._closing = False
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+        threading.Thread(target=self._auto_loop, daemon=True).start()
         self._emit('就绪。流程: [add] 隔离当前号 → 启动 Codex 登录新号 → [get] 收取入池。')
 
     # -- 界面 --
@@ -392,18 +481,22 @@ class App(tk.Tk):
                                       width=14)
         self.btn_proxy = ttk.Button(top, text='proxy  代理', command=self.on_proxy,
                                     width=12)
+        self.btn_auto = ttk.Button(top, text='auto  自动切换',
+                                   command=self.on_auto, width=14)
         for i, b in enumerate((self.btn_add, self.btn_get, self.btn_status,
                                self.btn_use)):
             b.grid(row=0, column=i, padx=(0, 8), pady=(0, 4))
         for i, b in enumerate((self.btn_import, self.btn_rm, self.btn_trash,
-                               self.btn_refresh, self.btn_proxy)):
+                               self.btn_refresh, self.btn_auto, self.btn_proxy)):
             b.grid(row=1, column=i, padx=(0, 8))
         top.columnconfigure(4, weight=1)
 
         self.lbl_live = ttk.Label(top, text='', foreground='#0a5')
         self.lbl_live.grid(row=2, column=0, columnspan=5, sticky='w', pady=(8, 0))
         self.lbl_pending = ttk.Label(top, text='', foreground='#b60')
-        self.lbl_pending.grid(row=3, column=0, columnspan=5, sticky='w')
+        self.lbl_pending.grid(row=3, column=0, columnspan=6, sticky='w')
+        self.lbl_auto = ttk.Label(top, text='', foreground='#56c')
+        self.lbl_auto.grid(row=4, column=0, columnspan=6, sticky='w')
 
         mid = ttk.Frame(self, padding=(10, 0))
         mid.pack(fill='x')
@@ -452,6 +545,10 @@ class App(tk.Tk):
                 elif kind == 'refresh':
                     self.refresh_table()
                     self.show_live_summary()
+                elif kind == 'auto_label':
+                    self.lbl_auto.configure(text=msg or '')
+                elif kind == 'busy':
+                    self.set_busy(True)
                 elif kind == 'done':
                     self.set_busy(False)
         except queue.Empty:
@@ -463,7 +560,8 @@ class App(tk.Tk):
         state = 'disabled' if flag else 'normal'
         for b in (self.btn_add, self.btn_get, self.btn_status,
                   self.btn_use, self.btn_rm, self.btn_trash,
-                  self.btn_refresh, self.btn_import, self.btn_proxy):
+                  self.btn_refresh, self.btn_import, self.btn_auto,
+                  self.btn_proxy):
             b.configure(state=state)
 
     def selected_slot(self):
@@ -805,67 +903,228 @@ class App(tk.Tk):
             return
 
         def work():
-            cd = pool.cooldown_remaining()
-            if cd > 0:
-                self._emit(f'冷却中: 距上次切换不足 {pool.COOLDOWN_SEC} 秒, 请等 {int(cd) + 1} 秒(防连切)。')
-                return
-            if not pool.acquire_lock():
-                self._emit('另一个切换操作正在进行(GUI 或 CLI), 已中止。')
-                return
-            try:
-                self._emit('正在退出 Codex Desktop...')
-                if not kill_codex():
-                    self._emit('Codex 进程未能全部退出, 已中止。' + kill_err_hint())
-                    return
+            if uncaptured and ans:
                 # 防护: 切走前, 把未入池的当前号先收进池
-                if uncaptured and ans:
+                try:
+                    pend_slot = None
                     try:
-                        pend_slot = None
-                        try:
-                            pend_slot = json.loads(PENDING.read_text(encoding='utf-8')).get('slot')
-                        except Exception:
-                            pass
-                        cap_slot = pend_slot or pick_target_slot(None)
-                        live_auth = read_live_retry()
-                        sd = SLOTS / cap_slot
-                        sd.mkdir(parents=True, exist_ok=True)
-                        if (sd / 'auth.json').exists():
-                            pool.backup_file(sd / 'auth.json', f'slot{cap_slot}-before-capture')
-                        save_auth(sd / 'auth.json', live_auth)
-                        CURRENT.write_text(cap_slot, encoding='utf-8')
-                        PENDING.unlink(missing_ok=True)
-                        meta = load_meta()
-                        meta.setdefault(cap_slot, {})['email'] = pool.describe(live_auth)[0]
-                        save_meta(meta)
-                        self._emit(f'防护: 当前号已先收进槽位 [{cap_slot}]。')
-                    except Exception as e:
-                        self._emit(f'自动收取失败({e}), 已中止切换 — 请先手动点 get。')
-                        return
-                target_auth = pool.load_auth(SLOTS / name / 'auth.json')
-                target_acc = pool.account_id(target_auth)
-                if LIVE.exists():
-                    try:
-                        if pool.account_id(pool.load_auth(LIVE)) == target_acc:
-                            CURRENT.write_text(name, encoding='utf-8')
-                            self._emit(f'槽位 [{name}] 已是当前登录, 无需切换(幂等)。')
-                            return
+                        pend_slot = json.loads(PENDING.read_text(encoding='utf-8')).get('slot')
                     except Exception:
                         pass
-                    pool.backup_file(LIVE, f'live-before-use{name}')
-                    pool.sync_live_to_current_slot()
-                pool.write_auth_atomic(target_auth, LIVE)
-                if not pool.verify_live(target_acc):
-                    self._emit('校验失败: live auth.json 与目标账号不符, 已中止'
-                               '(改动前的文件已备份在 backups/)。')
+                    cap_slot = pend_slot or pick_target_slot(None)
+                    live_auth = read_live_retry()
+                    sd = SLOTS / cap_slot
+                    sd.mkdir(parents=True, exist_ok=True)
+                    if (sd / 'auth.json').exists():
+                        pool.backup_file(sd / 'auth.json', f'slot{cap_slot}-before-capture')
+                    save_auth(sd / 'auth.json', live_auth)
+                    CURRENT.write_text(cap_slot, encoding='utf-8')
+                    PENDING.unlink(missing_ok=True)
+                    meta = load_meta()
+                    meta.setdefault(cap_slot, {})['email'] = pool.describe(live_auth)[0]
+                    save_meta(meta)
+                    self._emit(f'防护: 当前号已先收进槽位 [{cap_slot}]。')
+                except Exception as e:
+                    self._emit(f'自动收取失败({e}), 已中止切换 — 请先手动点 get。')
                     return
-                CURRENT.write_text(name, encoding='utf-8')
-                pool.note_switch()
-                self._emit(f'已切换到槽位 [{name}]。重新打开 Codex Desktop 生效。')
-                self._emit(None, 'refresh')
-            finally:
-                pool.release_lock()
+            ok, msg = self._perform_switch(name, '手动')
+            self._emit(msg)
 
         self.run_bg(work)
+
+    def _on_close(self):
+        self._closing = True
+        self.destroy()
+
+    # ---------- 自动切换 watcher ----------
+    def _auto_note(self, text):
+        self._emit(text)
+        self._emit(text, 'auto_label')
+
+    def _auto_loop(self):
+        while not self._closing:
+            try:
+                cfg = load_auto_cfg()
+                if cfg['mode'] != 'off' and not self.busy \
+                        and time.time() >= self._auto_next_check:
+                    self._auto_tick(cfg)
+                time.sleep(15)
+            except Exception:
+                log('auto 循环异常: ' + traceback.format_exc())
+                time.sleep(60)
+
+    def _auto_tick(self, cfg):
+        label = '自动切换: ' + ('影子模式(只告警)' if cfg['mode'] == 'shadow' else '执行模式')
+        try:
+            if PENDING.exists():
+                self._auto_note(label + ' · 暂停: 存在待收标记(add 进行中)')
+                self._auto_next_check = time.time() + 60
+                return
+            cur = pool.read_current()
+            if not cur or not (SLOTS / cur / 'auth.json').exists():
+                self._auto_note(label + ' · 暂停: 当前槽位无效')
+                self._auto_next_check = time.time() + 60
+                return
+            if pool.cooldown_remaining() > 0:
+                self._auto_next_check = time.time() + pool.cooldown_remaining() + 5
+                return
+            if LIVE.exists():
+                try:
+                    live_acc = pool.account_id(pool.load_auth(LIVE))
+                    if live_acc and not pool.find_slot_by_account(live_acc):
+                        self._auto_note(label + ' · 暂停: 当前登录未入池(先点 get)')
+                        self._auto_next_check = time.time() + 120
+                        return
+                except Exception:
+                    return
+            usage_map, cur_pri = {}, None
+            for name in slot_names():
+                f = SLOTS / name / 'auth.json'
+                if not f.exists():
+                    continue
+                try:
+                    auth = pool.load_auth(f)
+                    if exp_epoch(auth) < time.time() + 120:
+                        auth = refresh_auth(auth)
+                        save_auth(f, auth)
+                    u = fetch_usage(auth)
+                    usage_map[name] = u
+                    p_txt = f"{u['primary']:.0f}%" if u['primary'] is not None else '无'
+                    s_txt = f"{u['secondary']:.0f}%" if u['secondary'] is not None else '无'
+                    self.quota[name] = {'p': p_txt, 's': s_txt,
+                                        'pr': u['primary_reset_at'],
+                                        'sr': u['secondary_reset_at'],
+                                        'cards': u.get('cards')}
+                    if u['reached']:
+                        self.reached.add(name)
+                    else:
+                        self.reached.discard(name)
+                    if name == cur:
+                        cur_pri = u['primary']
+                except Exception:
+                    usage_map[name] = None
+            self._emit(None, 'refresh')
+            self._auto_next_check = time.time() + auto_interval_sec(cur_pri)
+            action, target, reason = decide_auto_switch(usage_map, cur, cfg['threshold'])
+            if action == 'switch':
+                now = time.time()
+                self._auto_times = [t for t in self._auto_times if now - t < 3600]
+                if len(self._auto_times) >= cfg['max_per_hour']:
+                    self._auto_note(f'{label} · 已达每小时上限({cfg["max_per_hour"]}), '
+                                    f'本轮不切: {reason}')
+                    return
+                if cfg['mode'] == 'shadow':
+                    self._auto_note(f'{label} · [影子] {reason}, '
+                                    f'拟切换 [{cur}] → [{target}] (仅告警不执行)')
+                else:
+                    self._auto_note(f'{label} · {reason}, 正在切换 [{cur}] → [{target}] ...')
+                    self.busy = True
+                    self._emit(None, 'busy')
+                    try:
+                        ok, msg = self._perform_switch(target, '自动')
+                        self._auto_times.append(time.time())
+                        self._auto_note(label + ' · ' + msg)
+                        if ok and cfg['relaunch']:
+                            self._relaunch_codex()
+                    finally:
+                        self.busy = False
+                        self._emit(None, 'done')
+            elif action == 'blocked_all':
+                resets = [u.get('primary_reset_at') or u.get('secondary_reset_at')
+                          for u in usage_map.values() if u]
+                resets = [r for r in resets if r]
+                when = fmt_reset(min(resets)) if resets else '?'
+                self._auto_note(f'{label} · 全部账号不可用(打满/失效), 最早重置于 {when}, 等待中。')
+        except Exception:
+            log('auto tick 异常: ' + traceback.format_exc())
+            self._auto_next_check = time.time() + 300
+
+    def _relaunch_codex(self):
+        appid = find_codex_appid()
+        if appid:
+            try:
+                subprocess.Popen(['explorer.exe', f'shell:AppsFolder\\{appid}'])
+                self._emit('[自动] 已尝试重新启动 Codex Desktop。')
+                return
+            except Exception:
+                pass
+        self._emit('[自动] 未能自动重启 Codex Desktop, 请手动打开。')
+
+    def on_auto(self):
+        cfg = load_auto_cfg()
+        win = tk.Toplevel(self)
+        win.title('自动切换设置')
+        win.geometry('440x330')
+        win.grab_set()
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill='both', expand=True)
+        mode = tk.StringVar(value=cfg['mode'])
+        ttk.Label(frm, text='模式:').pack(anchor='w')
+        for val, txt in (('off', '关闭 — 不自动切换'),
+                         ('shadow', '影子 — 只检测告警, 不执行(建议先跑几天)'),
+                         ('exec', '执行 — 打满自动切换, 并尝试重启 Codex')):
+            ttk.Radiobutton(frm, value=val, text=txt, variable=mode).pack(anchor='w', padx=(10, 0))
+        row = ttk.Frame(frm)
+        row.pack(fill='x', pady=(10, 0))
+        ttk.Label(row, text='触发阈值(5h用量%):').pack(side='left')
+        thr = tk.IntVar(value=cfg['threshold'])
+        ttk.Spinbox(row, from_=80, to=100, textvariable=thr, width=6).pack(side='left', padx=(6, 0))
+        ttk.Label(row, text='每小时最多切换:').pack(side='left', padx=(12, 0))
+        mph = tk.IntVar(value=cfg['max_per_hour'])
+        ttk.Spinbox(row, from_=1, to=6, textvariable=mph, width=6).pack(side='left', padx=(6, 0))
+        relaunch = tk.BooleanVar(value=cfg['relaunch'])
+        ttk.Checkbutton(frm, text='切换后尝试自动重启 Codex Desktop',
+                        variable=relaunch).pack(anchor='w', pady=(8, 0))
+        ttk.Label(frm, foreground='#777', wraplength=400, text=(
+            '检查间隔自动分层: 5h<50% 每30分 / 50-80% 每10分 / >80% 每5分。\n'
+            '选号策略: 周额度最低者优先(排除周>95%与失效号); 触发默认100%=真打满才切,\n'
+            '调低可提前切换但可能打断进行中的任务。')).pack(anchor='w', pady=(8, 0))
+
+        def save():
+            save_auto_cfg({'mode': mode.get(), 'threshold': int(thr.get()),
+                           'max_per_hour': int(mph.get()),
+                           'relaunch': bool(relaunch.get())})
+            self._auto_next_check = 0.0
+            m = {'off': '已关闭', 'shadow': '影子模式(只告警)', 'exec': '执行模式'}[mode.get()]
+            self._emit(f'自动切换设置已保存: {m}, 阈值 {thr.get()}%, 每小时上限 {mph.get()}。')
+            self._auto_note(f'自动切换: {m}' if mode.get() != 'off' else '')
+            win.destroy()
+
+        ttk.Button(frm, text='保存', command=save).pack(pady=(10, 0))
+
+    def _perform_switch(self, name, source='manual'):
+        """一次完整受保护切换: 冷却→锁→退Codex→备份→换入→校验。
+        须在后台线程调用(on_use 与自动切换共用)。返回 (ok, msg)。"""
+        cd = pool.cooldown_remaining()
+        if cd > 0:
+            return False, f'冷却中: 请等 {int(cd) + 1} 秒再切换(防连切)。'
+        if not pool.acquire_lock():
+            return False, '另一个切换操作正在进行(GUI 或 CLI), 已中止。'
+        try:
+            self._emit('正在退出 Codex Desktop...')
+            if not kill_codex():
+                return False, 'Codex 进程未能全部退出, 已中止。' + kill_err_hint()
+            target_auth = pool.load_auth(SLOTS / name / 'auth.json')
+            target_acc = pool.account_id(target_auth)
+            if LIVE.exists():
+                try:
+                    if pool.account_id(pool.load_auth(LIVE)) == target_acc:
+                        CURRENT.write_text(name, encoding='utf-8')
+                        return True, f'槽位 [{name}] 已是当前登录, 无需切换(幂等)。'
+                except Exception:
+                    pass
+                pool.backup_file(LIVE, f'live-before-use{name}')
+                pool.sync_live_to_current_slot()
+            pool.write_auth_atomic(target_auth, LIVE)
+            if not pool.verify_live(target_acc):
+                return False, ('校验失败: live auth.json 与目标账号不符, 已中止'
+                               '(改动前的文件已备份在 backups/)。')
+            CURRENT.write_text(name, encoding='utf-8')
+            pool.note_switch()
+            self._emit(None, 'refresh')
+            return True, f'已切换到槽位 [{name}]({source})。重新打开 Codex Desktop 生效。'
+        finally:
+            pool.release_lock()
 
     def on_rm(self):
         name = self.selected_slot()

@@ -90,6 +90,7 @@ Buttons (top panel):
 | `rm  删除(入回收站)` | Move the selected account to the recycle bin |
 | `trash  回收站` | Recycle bin (restore / purge) |
 | `Refresh  刷新` | Refresh the table locally (no network) |
+| `auto  自动切换` | Auto-switch settings (off / shadow = alert-only / exec = switch when maxed; dynamic check intervals, hourly cap, optional auto-relaunch) |
 | `proxy  代理` | Proxy settings (`auto` / `none` / a URL) |
 
 Table columns:
