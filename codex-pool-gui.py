@@ -137,7 +137,15 @@ def _taskkill(*extra):
         return subprocess.run([*args, *extra], capture_output=True,
                               creationflags=CREATE_NO_WINDOW, timeout=15)
     except subprocess.TimeoutExpired:
-        return None  # 系统命令挂起, 由调用方中止
+        # taskkill 挂起 → PowerShell 兜底强杀
+        out = pool._ps_run("Get-Process -Name ChatGPT,codex -ErrorAction "
+                           "SilentlyContinue | Stop-Process -Force; 'killed'")
+        if out is None:
+            return None
+        class _R:
+            stdout = b''
+            stderr = b''
+        return _R()
 
 
 def _codex_pids():
@@ -147,7 +155,17 @@ def _codex_pids():
                            capture_output=True, creationflags=CREATE_NO_WINDOW,
                            timeout=15)
     except subprocess.TimeoutExpired:
-        return None
+        # tasklist 系统级挂起 → PowerShell 兜底
+        out = pool._ps_run("Get-Process -Name ChatGPT,codex -ErrorAction "
+                           "SilentlyContinue | ForEach-Object { \"$($_.Id) $($_.ProcessName)\" }")
+        if out is None:
+            return None
+        found = {}
+        for ln in out.splitlines():
+            parts = ln.split()
+            if len(parts) == 2 and parts[0].isdigit():
+                found.setdefault(parts[1].lower() + '.exe', []).append(int(parts[0]))
+        return found
     want = {n.lower() for n in PROC_NAMES}
     found = {}
     for line in r.stdout.decode('gbk', errors='replace').splitlines():

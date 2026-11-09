@@ -224,16 +224,32 @@ def note_switch():
         ensure_ascii=False), encoding='utf-8')
 
 
+def _ps_run(cmd, timeout=15):
+    """PowerShell 兜底通道(tasklist/taskkill 系统级挂起时仍可用)。"""
+    try:
+        r = subprocess.run(['powershell', '-NoProfile', '-Command', cmd],
+                           capture_output=True, timeout=timeout,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return (r.stdout or b'').decode('utf-8', errors='replace')
+    except Exception:
+        return None
+
+
 def codex_running():
     # Codex Desktop(MSIX)宿主是 ChatGPT.exe, 会孵化/复活 codex.exe, 两个都要查
     try:
         r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'],
                            capture_output=True, timeout=15,
                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        out = r.stdout.lower()
+        return b'codex.exe' in out or b'chatgpt.exe' in out
     except Exception:
-        return True  # 查询挂起时保守视为在运行, 拒绝切换
-    out = r.stdout.lower()
-    return b'codex.exe' in out or b'chatgpt.exe' in out
+        pass  # tasklist 挂起 → PowerShell 兜底
+    out = _ps_run("Get-Process -Name ChatGPT,codex -ErrorAction SilentlyContinue "
+                  "| Select-Object -First 1 -ExpandProperty ProcessName")
+    if out is None:
+        return True  # 两种方式都失败, 保守拒绝
+    return bool(out.strip())
 
 
 def verify_live(expect_acc, tries=3):
