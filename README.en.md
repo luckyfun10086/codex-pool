@@ -143,6 +143,32 @@ Other cues:
 - Always let the tool quit Codex Desktop for you before a switch — it verifies
   the swap afterwards.
 
+## VPS remote monitor (optional, read-only)
+
+See quotas and ban alerts while away from the machine:
+
+```bash
+# 1) On the VPS (Ubuntu/Debian, python3 only, zero deps):
+mkdir -p /opt/codex-pool-monitor
+scp codex-pool.py codex-pool-monitor.py deploy/codex-pool-monitor.service user@vps:/opt/codex-pool-monitor/
+cat > /opt/codex-pool-monitor/monitor-config.json <<'EOF'
+{"port": 8787, "auth_key": "use-a-strong-random-string", "poll_minutes": 20,
+ "telegram_bot_token": "", "telegram_chat_id": "", "webhook_url": ""}
+EOF
+sudo cp /opt/codex-pool-monitor/codex-pool-monitor.service /etc/systemd/system/
+sudo systemctl enable --now codex-pool-monitor
+
+# 2) Open port 8787 in the firewall/security group
+
+# 3) In the GUI press [vps Monitor], enter http://<vps-ip>:8787 + auth_key, save
+```
+
+- Read-only: the server only calls the free usage endpoint; it holds
+  access_tokens but **never refreshes** and never switches.
+- Alerts: dead token (401) / maxed out / all-maxed → Telegram or webhook.
+- ⚠ Plain HTTP exposes tokens in transit — front it with TLS (caddy/nginx) or
+  use an SSH tunnel in production.
+
 ## Known limitations
 
 - Windows only (process control via taskkill/tasklist; proxy detection reads

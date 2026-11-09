@@ -46,81 +46,18 @@ else:
     if not _core.exists():
         _core = BASE / 'codex-pool.py'
 
-AUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
-RATE_URL = 'https://chatgpt.com/backend-api/codex/usage'
-DEFAULT_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
-CODEX_UA = {
-    'User-Agent': 'codex_cli_rs/0.42.0 (Windows 10; x86_64) WindowsTerminal',
-    'originator': 'codex_cli_rs',
-}
-
-# ---------- 代理(自动探测本机代理端口, 可手动覆盖) ----------
-PROXY_FILE = BASE / 'proxy.json'
-PROXY_CANDIDATES = [7897, 7890, 7891, 7899, 10808, 10809, 1080, 2080, 8888, 8889]
-_opener = None
-_opener_proxy = '?'
-
-
-def _port_listening(port):
-    s = socket.socket()
-    s.settimeout(0.3)
-    try:
-        s.connect(('127.0.0.1', port))
-        return True
-    except Exception:
-        return False
-    finally:
-        s.close()
-
-
-def detect_proxy():
-    """返回 'http://127.0.0.1:port' 或 None(直连)。proxy.json 可手动指定/禁用。"""
-    try:
-        conf = json.loads(PROXY_FILE.read_text(encoding='utf-8'))
-        p = (conf.get('proxy') or '').strip()
-        if p.lower() == 'none':
-            return None
-        if p.lower() not in ('', 'auto'):
-            return p
-    except Exception:
-        pass
-    try:
-        import winreg
-        k = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r'Software\Microsoft\Windows\CurrentVersion\Internet Settings')
-        server = ''
-        try:
-            server, _ = winreg.QueryValueEx(k, 'ProxyServer')
-        except Exception:
-            pass
-        # ProxyEnable=0 但地址还在且端口在听: 客户端没开系统代理开关, 照样用它
-        if server and '=' not in server:
-            host, _, port = server.rpartition(':')
-            if port.isdigit() and _port_listening(int(port)):
-                return f'http://{host or "127.0.0.1"}:{port}'
-    except Exception:
-        pass
-    for port in PROXY_CANDIDATES:
-        if _port_listening(port):
-            return f'http://127.0.0.1:{port}'
-    return None
-
-
-def get_opener():
-    global _opener, _opener_proxy
-    proxy = detect_proxy()
-    if _opener is None or _opener_proxy != proxy:
-        handler = urllib.request.ProxyHandler(
-            {'https': proxy, 'http': proxy} if proxy else {})
-        _opener = urllib.request.build_opener(handler)
-        _opener_proxy = proxy
-    return _opener
-
-# 复用核心脚本里的槽位/解析逻辑, 单一数据源 (加载位置见文件头 _core)
+# 复用核心脚本里的槽位/额度/代理逻辑, 单一数据源 (加载位置见文件头 _core)
 _spec = importlib.util.spec_from_file_location('poolcore', _core)
 pool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pool)
+
+# 额度查询/token刷新/代理探测已下沉到核心库, 这里引用保持调用点不变
+refresh_auth = pool.refresh_auth
+fetch_usage = pool.fetch_usage
+http_err_short = pool.http_err_short
+detect_proxy = pool.detect_proxy
+get_opener = pool.get_opener
+PROXY_FILE = pool.PROXY_FILE
 
 
 def log(msg):
@@ -146,62 +83,6 @@ def save_auth(path, auth):
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(auth, ensure_ascii=False, indent=2), encoding='utf-8')
     os.replace(tmp, path)
-
-
-def refresh_auth(auth):
-    """用 refresh_token 换新 access_token, 就地更新并返回。失败抛异常。"""
-    tok = auth['tokens']
-    body = {
-        'grant_type': 'refresh_token',
-        'refresh_token': tok['refresh_token'],
-        'client_id': tok.get('oauth_provenance', {}).get('client_id', DEFAULT_CLIENT_ID),
-        'scope': 'openid profile email offline_access',
-    }
-    req = urllib.request.Request(
-        AUTH_TOKEN_URL, data=json.dumps(body).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}, method='POST')
-    with get_opener().open(req, timeout=25) as r:
-        out = json.loads(r.read().decode('utf-8'))
-    tok['access_token'] = out['access_token']
-    if out.get('id_token'):
-        tok['id_token'] = out['id_token']
-    if out.get('refresh_token'):
-        tok['refresh_token'] = out['refresh_token']
-    auth['last_refresh'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    return auth
-
-
-def fetch_usage(auth):
-    """返回 dict: primary/secondary 用量%, 各自重置秒数, 是否打满。失败抛异常。"""
-    hdr = {
-        'Authorization': 'Bearer ' + auth['tokens']['access_token'],
-        'ChatGPT-Account-Id': auth['tokens'].get('account_id') or pool.account_id(auth) or '',
-        **CODEX_UA,
-    }
-    req = urllib.request.Request(RATE_URL, headers=hdr)
-    with get_opener().open(req, timeout=25) as r:
-        data = json.loads(r.read().decode('utf-8'))
-    rl = data.get('rate_limit') or {}
-    # 按窗口时长识别(18000s=5h, 604800s=周), 兼容新版"仅周额度"账号
-    win5 = winw = None
-    for w in (rl.get('primary_window'), rl.get('secondary_window')):
-        if not w:
-            continue
-        secs = w.get('limit_window_seconds')
-        if secs == 18000 and win5 is None:
-            win5 = w
-        elif secs == 604800 and winw is None:
-            winw = w
-    return {
-        'primary': win5.get('used_percent') if win5 else None,
-        'secondary': winw.get('used_percent') if winw else None,
-        'primary_reset': win5.get('reset_after_seconds') if win5 else None,
-        'secondary_reset': winw.get('reset_after_seconds') if winw else None,
-        'primary_reset_at': win5.get('reset_at') if win5 else None,
-        'secondary_reset_at': winw.get('reset_at') if winw else None,
-        'reached': bool(rl.get('limit_reached')),
-        'cards': (data.get('rate_limit_reset_credits') or {}).get('available_count'),
-    }
 
 
 def fmt_dur(sec):
@@ -236,18 +117,6 @@ def fmt_reset(ts):
     return f'{dt:%m-%d %H:%M}'
 
 
-def http_err_short(e):
-    if isinstance(e, urllib.error.HTTPError):
-        if e.code == 401:
-            return '凭证失效(401, 需重新登录该号)'
-        if e.code == 403:
-            return '被拒(403): 多半是没走代理/地区拦截, 凭证本身不一定有问题'
-        if e.code == 429:
-            return '请求过频(429)'
-        return f'HTTP {e.code}'
-    if isinstance(e, urllib.error.URLError):
-        return f'连不上({e.reason})'
-    return f'{type(e).__name__}: {e}'[:80]
 
 
 # ---------- 进程与槽位辅助 ----------
@@ -379,6 +248,21 @@ def save_auto_cfg(cfg):
     save_meta(meta)
 
 
+def load_vps_cfg():
+    try:
+        v = load_meta().get('vps') or {}
+    except Exception:
+        v = {}
+    return {'url': (v.get('url') or '').strip().rstrip('/'),
+            'key': (v.get('key') or '').strip()}
+
+
+def save_vps_cfg(url, key):
+    meta = load_meta()
+    meta['vps'] = {'url': url.strip().rstrip('/'), 'key': key.strip()}
+    save_meta(meta)
+
+
 def auto_interval_sec(primary):
     """动态检查间隔: 用量越高查得越频 (CodexPool 的三档策略)。"""
     if primary is None:
@@ -492,6 +376,7 @@ class App(tk.Tk):
         self._closing = False
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         threading.Thread(target=self._auto_loop, daemon=True).start()
+        self.after(3000, lambda: self._vps_push())
         self._emit(T('就绪。流程: [add] 隔离当前号 → 启动 Codex 登录新号 → [get] 收取入池。',
                  'Ready. Flow: [add] isolate current login -> log a new account in Codex -> [get] capture.'))
 
@@ -528,14 +413,16 @@ class App(tk.Tk):
         self.btn_auto = ttk.Button(top, text=T('auto  自动切换',
                                                'auto  Auto-switch'),
                                    command=self.on_auto, )
+        self.btn_vps = ttk.Button(top, text=T('vps  监控', 'vps  Monitor'),
+                                   command=self.on_vps)
         self.btn_lang = ttk.Button(top, text=T('中/EN', '中/EN'),
                                    command=self.on_lang, )
         for i, b in enumerate((self.btn_add, self.btn_get, self.btn_status,
                                self.btn_use)):
             b.grid(row=0, column=i, padx=(0, 8), pady=(0, 4))
         for i, b in enumerate((self.btn_import, self.btn_rm, self.btn_trash,
-                               self.btn_refresh, self.btn_auto, self.btn_proxy,
-                               self.btn_lang)):
+                               self.btn_refresh, self.btn_auto, self.btn_vps,
+                               self.btn_proxy, self.btn_lang)):
             b.grid(row=1, column=i, padx=(0, 8))
         top.columnconfigure(4, weight=1)
 
@@ -601,6 +488,7 @@ class App(tk.Tk):
         self.btn_refresh.configure(text=T('Refresh  刷新', 'Refresh'))
         self.btn_proxy.configure(text=T('proxy  代理', 'proxy'))
         self.btn_auto.configure(text=T('auto  自动切换', 'auto  Auto-switch'))
+        self.btn_vps.configure(text=T('vps  监控', 'vps  Monitor'))
         cols = ('slot', 'email', 'pwd', 'note', 'plan', 'until', 'q5', 'q5r',
                 'qw', 'qwr', 'card', 'state')
         for c, h in zip(cols, self._head_texts()):
@@ -651,7 +539,7 @@ class App(tk.Tk):
         for b in (self.btn_add, self.btn_get, self.btn_status,
                   self.btn_use, self.btn_rm, self.btn_trash,
                   self.btn_refresh, self.btn_import, self.btn_auto,
-                  self.btn_proxy, self.btn_lang):
+                  self.btn_vps, self.btn_proxy, self.btn_lang):
             b.configure(state=state)
 
     def selected_slot(self):
@@ -857,6 +745,7 @@ class App(tk.Tk):
                     ensure_ascii=False), encoding='utf-8')
                 pool.note_switch()
                 self._emit(f'现在启动 Codex Desktop 登录新号, 登录完成后回来点 [get] → 槽位 [{target}]。')
+                self._vps_push()
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -916,6 +805,7 @@ class App(tk.Tk):
                              f'当前登录未变, 点 Status 可验证凭证活性与额度。',
                              f'{verb} -> slot [{target}]: {email} ({plan}, sub until {until}). '
                              f'Current login unchanged; press Status to verify the credential.'))
+                self._vps_push()
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -977,6 +867,7 @@ class App(tk.Tk):
                              f'当前 Desktop 登录就是它, 无需重启。',
                              f'{action} -> slot [{target}]: {email} ({plan}, sub until {until}). '
                              f'It is the current Desktop login; no restart needed.'))
+                self._vps_push()
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -1256,6 +1147,7 @@ class App(tk.Tk):
                                 'account; aborted (previous file backed up in backups/).')
             CURRENT.write_text(name, encoding='utf-8')
             pool.note_switch()
+            self._vps_push()
             self._emit(None, 'refresh')
             return True, T(f'已切换到槽位 [{name}]({source})。重新打开 Codex Desktop 生效。',
                            f'Switched to slot [{name}] ({source}). Reopen Codex Desktop to take effect.')
@@ -1311,6 +1203,7 @@ class App(tk.Tk):
                 self.reached.discard(name)
                 self._emit(T(f'槽位 [{name}] 已移入回收站, 可点 [trash 回收站] 恢复。',
                              f'Slot [{name}] moved to the recycle bin; restore via [trash].'))
+                self._vps_push()
                 self._emit(None, 'refresh')
             finally:
                 pool.release_lock()
@@ -1415,6 +1308,86 @@ class App(tk.Tk):
         ttk.Button(btns, text=T('关闭', 'Close'), command=win.destroy).pack(side='right')
         load()
 
+    def _vps_snapshot(self):
+        """收集全部槽位的只读快照(access_token 级, 不含 refresh_token)。"""
+        accounts = []
+        for name in slot_names():
+            f = SLOTS / name / 'auth.json'
+            if not f.exists():
+                continue
+            try:
+                auth = pool.load_auth(f)
+                email, plan, until, _ = pool.describe(auth)
+                accounts.append({
+                    'slot': name, 'email': email, 'plan': plan, 'sub_until': until,
+                    'access_token': auth['tokens'].get('access_token', ''),
+                    'account_id': auth['tokens'].get('account_id')
+                                  or pool.account_id(auth) or '',
+                })
+            except Exception:
+                continue
+        return accounts
+
+    def _vps_push(self, manual=False):
+        """把账号快照+最新额度推给 VPS 监控(未配置则静默跳过; 后台线程)。"""
+        cfg = load_vps_cfg()
+        if not cfg['url']:
+            if manual:
+                self._emit(T('未配置 VPS 监控地址。', 'VPS monitor URL not configured.'))
+            return
+
+        def work():
+            try:
+                body = json.dumps({
+                    'accounts': self._vps_snapshot(),
+                    'usage': {k: {'p': v.get('p'), 's': v.get('s'),
+                                  'reached': k in self.reached}
+                              for k, v in self.quota.items() if isinstance(v, dict)},
+                }, ensure_ascii=False).encode('utf-8')
+                req = urllib.request.Request(
+                    cfg['url'] + '/sync', data=body,
+                    headers={'Content-Type': 'application/json',
+                             'X-Auth-Key': cfg['key']})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    r.read()
+                if manual:
+                    self._emit(T('VPS 同步成功。', 'VPS sync OK.'))
+            except Exception as e:
+                self._emit(T(f'VPS 同步失败: {e}', f'VPS sync failed: {e}'))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_vps(self):
+        cfg = load_vps_cfg()
+        win = tk.Toplevel(self)
+        win.title(T('VPS 远程监控', 'VPS remote monitor'))
+        win.geometry('460x260')
+        win.grab_set()
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill='both', expand=True)
+        ttk.Label(frm, text=T('监控服务地址 (如 http://1.2.3.4:8787)',
+                              'Monitor URL (e.g. http://1.2.3.4:8787)')).pack(anchor='w')
+        url = tk.StringVar(value=cfg['url'])
+        ttk.Entry(frm, textvariable=url, width=52).pack(fill='x', pady=(2, 8))
+        ttk.Label(frm, text=T('Auth Key (与服务器 monitor-config.json 一致)',
+                              'Auth key (must match the server config)')).pack(anchor='w')
+        key = tk.StringVar(value=cfg['key'])
+        ttk.Entry(frm, textvariable=key, width=52, show='*').pack(fill='x', pady=(2, 8))
+        ttk.Label(frm, foreground='#777', wraplength=430,
+                  text=T('保存后: 切换/收号/查额度时自动推送快照(仅 access_token, 只读监控)。',
+                          'After saving: snapshots (access_token only, read-only) '
+                          'are pushed on switch/capture/status.')).pack(anchor='w')
+
+        def save():
+            save_vps_cfg(url.get(), key.get())
+            m = T('已保存并立即同步。', 'Saved; syncing now.')
+            self._emit(T(f'VPS 监控配置已保存: {url.get() or "(未配置)"}。{m}',
+                         f'VPS monitor config saved: {url.get() or "(none)"}. {m}'))
+            self._vps_push(manual=True)
+            win.destroy()
+
+        ttk.Button(frm, text=T('保存并测试', 'Save & test'), command=save).pack(pady=(8, 0))
+
     def on_proxy(self):
         try:
             cur = json.loads(PROXY_FILE.read_text(encoding='utf-8')).get('proxy', 'auto')
@@ -1496,6 +1469,7 @@ class App(tk.Tk):
                                  f'Slot [{name}] query failed: {http_err_short(e)}'))
                 self._emit(None, 'refresh')
             self._emit(T('额度查询完成。', 'Quota query finished.'))
+            self._vps_push()
 
         self.run_bg(work)
 

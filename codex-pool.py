@@ -29,9 +29,12 @@ import json
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 CODEX_HOME = pathlib.Path.home() / '.codex'
 LIVE = CODEX_HOME / 'auth.json'
@@ -434,3 +437,146 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ---------- 用量查询 / token 刷新 / 代理 (GUI 与 VPS 监控共用) ----------
+
+AUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
+RATE_URL = 'https://chatgpt.com/backend-api/codex/usage'
+DEFAULT_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+CODEX_UA = {
+    'User-Agent': 'codex_cli_rs/0.42.0 (Windows 10; x86_64) WindowsTerminal',
+    'originator': 'codex_cli_rs',
+}
+
+PROXY_FILE = POOL / 'proxy.json'
+PROXY_CANDIDATES = [7897, 7890, 7891, 7899, 10808, 10809, 1080, 2080, 8888, 8889]
+_opener = None
+_opener_proxy = '?'
+
+
+def _port_listening(port):
+    s = socket.socket()
+    s.settimeout(0.3)
+    try:
+        s.connect(('127.0.0.1', port))
+        return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
+def detect_proxy():
+    """返回 'http://127.0.0.1:port' 或 None(直连)。proxy.json 可手动指定/禁用。"""
+    try:
+        conf = json.loads(PROXY_FILE.read_text(encoding='utf-8'))
+        p = (conf.get('proxy') or '').strip()
+        if p.lower() == 'none':
+            return None
+        if p.lower() not in ('', 'auto'):
+            return p
+    except Exception:
+        pass
+    try:
+        import winreg
+        k = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Internet Settings')
+        server = ''
+        try:
+            server, _ = winreg.QueryValueEx(k, 'ProxyServer')
+        except Exception:
+            pass
+        # ProxyEnable=0 但地址还在且端口在听: 客户端没开系统代理开关, 照样用它
+        if server and '=' not in server:
+            host, _, port = server.rpartition(':')
+            if port.isdigit() and _port_listening(int(port)):
+                return f'http://{host or "127.0.0.1"}:{port}'
+    except Exception:
+        pass
+    for port in PROXY_CANDIDATES:
+        if _port_listening(port):
+            return f'http://127.0.0.1:{port}'
+    return None
+
+
+def get_opener():
+    global _opener, _opener_proxy
+    proxy = detect_proxy()
+    if _opener is None or _opener_proxy != proxy:
+        handler = urllib.request.ProxyHandler(
+            {'https': proxy, 'http': proxy} if proxy else {})
+        _opener = urllib.request.build_opener(handler)
+        _opener_proxy = proxy
+    return _opener
+
+
+def refresh_auth(auth):
+    """用 refresh_token 换新 access_token, 就地更新并返回。失败抛异常。"""
+    tok = auth['tokens']
+    body = {
+        'grant_type': 'refresh_token',
+        'refresh_token': tok['refresh_token'],
+        'client_id': tok.get('oauth_provenance', {}).get('client_id', DEFAULT_CLIENT_ID),
+        'scope': 'openid profile email offline_access',
+    }
+    req = urllib.request.Request(
+        AUTH_TOKEN_URL, data=json.dumps(body).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    with get_opener().open(req, timeout=25) as r:
+        out = json.loads(r.read().decode('utf-8'))
+    tok['access_token'] = out['access_token']
+    if out.get('id_token'):
+        tok['id_token'] = out['id_token']
+    if out.get('refresh_token'):
+        tok['refresh_token'] = out['refresh_token']
+    auth['last_refresh'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return auth
+
+
+def fetch_usage(auth):
+    """返回 dict: primary/secondary 用量%, 各自重置秒数, 是否打满。失败抛异常。"""
+    hdr = {
+        'Authorization': 'Bearer ' + auth['tokens']['access_token'],
+        'ChatGPT-Account-Id': auth['tokens'].get('account_id') or account_id(auth) or '',
+        **CODEX_UA,
+    }
+    req = urllib.request.Request(RATE_URL, headers=hdr)
+    with get_opener().open(req, timeout=25) as r:
+        data = json.loads(r.read().decode('utf-8'))
+    rl = data.get('rate_limit') or {}
+    # 按窗口时长识别(18000s=5h, 604800s=周), 兼容新版"仅周额度"账号
+    win5 = winw = None
+    for w in (rl.get('primary_window'), rl.get('secondary_window')):
+        if not w:
+            continue
+        secs = w.get('limit_window_seconds')
+        if secs == 18000 and win5 is None:
+            win5 = w
+        elif secs == 604800 and winw is None:
+            winw = w
+    return {
+        'primary': win5.get('used_percent') if win5 else None,
+        'secondary': winw.get('used_percent') if winw else None,
+        'primary_reset': win5.get('reset_after_seconds') if win5 else None,
+        'secondary_reset': winw.get('reset_after_seconds') if winw else None,
+        'primary_reset_at': win5.get('reset_at') if win5 else None,
+        'secondary_reset_at': winw.get('reset_at') if winw else None,
+        'reached': bool(rl.get('limit_reached')),
+        'cards': (data.get('rate_limit_reset_credits') or {}).get('available_count'),
+    }
+
+
+def http_err_short(e):
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 401:
+            return '凭证失效(401, 需重新登录该号) / token dead (401, re-login needed)'
+        if e.code == 403:
+            return '被拒(403): 多半是没走代理/地区拦截 / rejected (403): likely no proxy or region block'
+        if e.code == 429:
+            return '请求过频(429) / too many requests (429)'
+        return f'HTTP {e.code}'
+    if isinstance(e, urllib.error.URLError):
+        return f'连不上({e.reason}) / cannot connect ({e.reason})'
+    return f'{type(e).__name__}: {e}'[:80]

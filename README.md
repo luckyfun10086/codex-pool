@@ -86,6 +86,30 @@ GUI 流程更简单：`add` → 打开 Codex 登录新号 → `get` → 完成�
   误操作可从备份恢复。
 - 切换账号请先完全退出 Codex Desktop，工具会自动处理并校验。
 
+## VPS 远程监控部署(可选, 只读)
+
+人不在电脑前也能看到额度/封号告警:
+
+```bash
+# 1) VPS 上(Ubuntu/Debian, 需 python3, 无第三方依赖):
+mkdir -p /opt/codex-pool-monitor
+scp codex-pool.py codex-pool-monitor.py deploy/codex-pool-monitor.service user@vps:/opt/codex-pool-monitor/  # service 放 /etc/systemd/system/
+cat > /opt/codex-pool-monitor/monitor-config.json <<'EOF'
+{"port": 8787, "auth_key": "换成强随机串", "poll_minutes": 20,
+ "telegram_bot_token": "", "telegram_chat_id": "", "webhook_url": ""}
+EOF
+sudo cp /opt/codex-pool-monitor/codex-pool-monitor.service /etc/systemd/system/
+sudo systemctl enable --now codex-pool-monitor
+
+# 2) 防火墙/安全组放行 8787(仅此端口)
+
+# 3) 本地 GUI 点 [vps 监控] 填 http://<vps-ip>:8787 和 auth_key, 保存即同步
+```
+
+- 只读: 服务端只调用免费 usage 接口, 持有 access_token 但**绝不刷新**、绝不切换;
+- 告警: 凭证失效(401)/打满/全员打满 → Telegram 或 Webhook;
+- ⚠️ 明文 HTTP 下 token 传输可被窃听, 生产建议套 TLS(caddy/nginx)或仅走 SSH 隧道。
+
 ## 已知边界
 
 - 仅支持 Windows（进程管理用 taskkill/tasklist，代理探测读注册表）。

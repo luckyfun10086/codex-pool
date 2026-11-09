@@ -44,6 +44,11 @@
 
 ## 阶段二: VPS 远程监控(只读) —— 腾讯云 VPS 的用武之地
 
+> **状态: 已实现 (v0.3.0)**。`codex-pool-monitor.py` 单文件部署(stdlib 零依赖):
+> GUI 侧配置 vps 地址后, 切换/收号/查额度时自动推送快照(仅 access_token,
+> 不含 refresh_token); 服务端自轮询额度(绝不刷新 token), 状态页 + JSON API,
+> 401/打满/全员打满事件推送(Telegram/Webhook)。见 README 部署一节。
+
 VPS 跑一个只读小服务: 定时查询全部槽位额度 → 产出状态页/推送通知
 (Telegram/Bark)。**VPS 不执行切换**——auth.json 在本地, 切换必须在本地。
 

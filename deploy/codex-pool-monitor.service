@@ -1,0 +1,12 @@
+[Unit]
+Description=codex-pool remote monitor (read-only)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/codex-pool-monitor
+ExecStart=/usr/bin/python3 /opt/codex-pool-monitor/codex-pool-monitor.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
