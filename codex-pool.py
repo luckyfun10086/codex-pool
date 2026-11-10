@@ -55,9 +55,18 @@ except Exception:
     pass  # 目录不可写时留给具体操作报出明确错误
 
 
+_EMAIL_MASK = {'on': True}
+
+
+def set_email_mask(on):
+    _EMAIL_MASK['on'] = bool(on)
+
+
 def mask(email):
     if not isinstance(email, str) or '@' not in email:
         return str(email)
+    if not _EMAIL_MASK['on']:
+        return email
     user, domain = email.split('@', 1)
     head = user[:2] if len(user) > 2 else user[:1]
     return f'{head}***@{domain}'

@@ -388,6 +388,11 @@ def save_lang(v):
 
 
 load_lang()
+# 邮箱显示模式(默认脱敏; 右键菜单可切换并持久化)
+try:
+    pool.set_email_mask(load_meta().get('mask_email', True))
+except Exception:
+    pool.set_email_mask(True)
 
 
 # ---------- GUI ----------
@@ -502,6 +507,7 @@ class App(tk.Tk):
         self.tree.bind('<<TreeviewSelect>>', self.on_select)
         self.tree.bind('<Double-1>', self.on_row_double)
         self.tree.bind('<Delete>', lambda _e: self.on_rm())
+        self.tree.bind('<Button-3>', self.on_tree_menu)
 
     @staticmethod
     def _head_texts():
@@ -677,6 +683,46 @@ class App(tk.Tk):
             self._emit(msg)
         except Exception:
             self._emit(T(f'槽位 [{name}] 凭证文件损坏。', f'Slot [{name}]: credential file corrupt.'))
+
+    def on_tree_menu(self, event):
+        """右键菜单: 切换邮箱脱敏显示 / 复制完整邮箱。"""
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+        menu = tk.Menu(self, tearoff=0)
+        masked = pool._EMAIL_MASK['on']
+        menu.add_command(
+            label=T('显示完整邮箱', 'Show full emails') if masked
+            else T('恢复脱敏邮箱', 'Mask emails'),
+            command=self._toggle_email_mask)
+        menu.add_command(label=T('复制完整邮箱', 'Copy full email'),
+                         command=self._copy_email)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _toggle_email_mask(self):
+        on = not pool._EMAIL_MASK['on']
+        pool.set_email_mask(on)
+        meta = load_meta()
+        meta['mask_email'] = on
+        save_meta(meta)
+        self.refresh_table()
+        self.show_live_summary()
+        self._emit(T('邮箱显示: 已切换为完整模式' if not on else '邮箱显示: 已切换为脱敏模式',
+                     'Email display: full' if not on else 'Email display: masked'))
+
+    def _copy_email(self):
+        name = self.selected_slot()
+        if not name:
+            return
+        try:
+            auth = pool.load_auth(SLOTS / name / 'auth.json')
+            email = pool.jwt_payload(auth['tokens']['id_token']).get('email', '')
+            if email:
+                self.clipboard_clear()
+                self.clipboard_append(email)
+                self._emit(T(f'已复制: {email}', f'Copied: {email}'))
+        except Exception as e:
+            self._emit(T(f'复制失败: {e}', f'Copy failed: {e}'))
 
     def on_row_double(self, event):
         """双击 密码列/附加列 直接编辑对应字段; 其他列无动作(切换用 use)。"""
