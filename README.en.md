@@ -184,4 +184,8 @@ sudo systemctl enable --now codex-pool-monitor
 
 ## License
 
-[MIT](LICENSE)
+Source-available, **non-commercial license** (see [LICENSE](LICENSE)):
+learning, personal use, internal non-commercial deployment, and
+contributions are permitted; commercial operation, public
+re-deployment, monetization, and redistribution are prohibited
+without written authorization. Releases up to v0.3.3 remain under MIT.

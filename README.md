@@ -120,6 +120,8 @@ sudo systemctl enable --now codex-pool-monitor
 - 额度接口为非公开接口（`chatgpt.com/backend-api/codex/usage`），
   字段变动可能导致额度列显示异常（不影响号池核心功能）。
 
-## License
+## 许可
 
-[MIT](LICENSE)
+本项目采用**源码开放 · 非商业许可**（见 [LICENSE](LICENSE)）：允许学习、
+个人自用、内部非商业使用与贡献 PR；**禁止**未经书面授权的商业运营、
+公开部署、变现与再分发。v0.3.3 及之前的历史版本仍按 MIT 授权。

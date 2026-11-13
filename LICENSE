@@ -1,21 +1,76 @@
-MIT License
+codex-pool Source-Available License（源码开放 · 非商业许可）
 
-Copyright (c) 2026 luckyfun10086
+本许可为中英双语版本，两种文本具有同等效力；如有歧义，以提交记录中
+最新修订为准。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+====================================================================
+一、中文版
+====================================================================
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+codex-pool 采用源码开放策略，不是无限制的商业开源授权。
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+允许：
+- 学习、研究和代码阅读。
+- 个人自用与本地部署。
+- 公司 / 团队内部非商业使用。
+- Fork 本仓库用于提交 Issue、PR 和改进建议（需遵守本许可）。
+
+未经书面授权，不允许：
+- 将 codex-pool 或其修改版作为公开网站、SaaS、API 服务对外运营，
+  或以任何形式公开重新部署、托管可供他人使用的实例。
+- 在部署版本中接入广告、AFF 链接、赞助位、付费导流或任何商业变现。
+- 运营与 codex-pool 定位相同或高度相似的账号池、凭证管理、
+  Codex/API 中转或额度聚合类服务。
+- 以自己的名义重新发布本项目或其修改版（再分发、二次销售、
+  或捆绑进商业产品分发）。
+- 使用 codex-pool 名称、Logo、截图、文档或公开宣传内容提供商业服务。
+
+codex-pool 名称、Logo、视觉品牌、文档与公开素材不随源码一起授权。
+未经书面授权，请勿公开部署、展示或运营会让用户误认为官方
+codex-pool 的服务。
+
+如有授权需求，请通过 GitHub Issues 与作者联系。
+
+====================================================================
+二、English Version
+====================================================================
+
+codex-pool is source-available software. It is NOT licensed for
+unlimited commercial use.
+
+Permitted:
+- Learning, studying, and reading the code.
+- Personal use and local deployment.
+- Internal, non-commercial use within a company or team.
+- Forking this repository to submit issues, pull requests, and
+  improvements (subject to this license).
+
+Not permitted without written authorization:
+- Operating codex-pool or modified versions as a public website,
+  SaaS, or API service, or publicly re-deploying / hosting instances
+  for others to use in any form.
+- Embedding advertisements, affiliate links, sponsorships, paid
+  referrals, or any other monetization in a deployed version.
+- Running services with the same or a highly similar purpose as
+  codex-pool (account pools, credential management, Codex/API
+  relays, or quota aggregation).
+- Republishing this project or modified versions under your own
+  name (redistribution, resale, or bundling into commercial
+  products).
+- Using the codex-pool name, logo, screenshots, documentation, or
+  promotional materials for commercial services.
+
+The codex-pool name, logo, visual brand, documentation, and public
+assets are not licensed with the source code. Do not publicly
+deploy, present, or operate any service that could be mistaken for
+an official codex-pool service without written authorization.
+
+For licensing inquiries, contact the author via GitHub Issues.
+
+====================================================================
+历史版本说明 / Note on prior releases:
+v0.3.3 及之前的版本以 MIT 许可发布，其授权对已获取者持续有效；
+本许可自其引入的版本起生效。
+Releases up to and including v0.3.3 were published under the MIT
+license, which remains effective for those who obtained them; this
+license takes effect from the version that introduces it.
