@@ -63,6 +63,14 @@ VPS 跑一个只读小服务: 定时查询全部槽位额度 → 产出状态页
 
 ## 阶段三: API 收束(中转网关) —— 触发条件出现后再做
 
+> **调研结论 (2026-11 实测)**: codex **核心**(codex exec)完整支持
+> `model_providers` 自定义端点(base_url + env_key 鉴权 + 仅 Responses 协议,
+> chat 协议已被官方废弃)——已用本地 mock 端到端验证。但 **Codex Desktop
+> 壳层无视 config.toml 的自定义 provider**:注入 provider 后 Desktop 仍按
+> ChatGPT 账号鉴权/限额拦截, 请求全部走真实后端, mock 零捕获。
+> 因此网关的消费面 = codex CLI / 脚本 / OpenAI 兼容工具, **不含 Desktop**;
+> Desktop 的无缝化只剩"热切换"(只杀核心进程)一条路。
+
 one-api/new-api 系网关或自研 codex 协议翻译层, 把号池变成一个
 OpenAI 兼容端点。**仅当出现"多设备/多工具/多人共享"需求时启动**,
 否则本地池更优。

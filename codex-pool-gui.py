@@ -354,8 +354,10 @@ def find_codex_appid():
     try:
         r = subprocess.run(
             ['powershell', '-NoProfile', '-Command',
-             "Get-StartApps | Where-Object {$_.Name -like '*Codex*'} "
-             "| Select-Object -First 1 -ExpandProperty AppID"],
+             "$a = Get-StartApps | Where-Object {$_.AppID -like 'OpenAI.Codex*'} "
+             "| Select-Object -First 1 -ExpandProperty AppID; "
+             "if (-not $a) { $a = Get-StartApps | Where-Object {$_.Name -like '*Codex*'} "
+             "| Select-Object -First 1 -ExpandProperty AppID }; $a"],
             capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=20)
         return r.stdout.decode('utf-8', errors='replace').strip() or None
     except Exception:
